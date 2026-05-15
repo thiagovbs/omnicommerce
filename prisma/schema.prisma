@@ -1,0 +1,132 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL") // Agora isso voltará a funcionar
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+}
+
+enum SaleStatus {
+  CREATED
+  PAID
+  INVOICED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum Currency {
+  BRL
+  USD
+  EUR
+}
+
+model Organization {
+  id           String        @id @default(cuid())
+  name         String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  auditLogs AuditLog[]
+  users        User[]
+  marketplaces Marketplace[]
+  sales        Sale[]
+}
+
+model User {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  email          String   @unique
+  passwordHash   String?
+  role           UserRole @default(OPERATOR)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  auditLogs AuditLog[]
+
+  @@index([organizationId])
+}
+
+model Marketplace {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  code           String
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sales        Sale[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+model Sale {
+  id              String     @id @default(cuid())
+  organizationId  String
+  marketplaceId   String
+  externalOrderId String
+  status          SaleStatus
+  soldAt          DateTime
+  currency        Currency   @default(BRL)
+
+  gross    Decimal @db.Decimal(14, 2)
+  shipping Decimal @db.Decimal(14, 2) @default(0)
+  discount Decimal @db.Decimal(14, 2) @default(0)
+  fees     Decimal @db.Decimal(14, 2) @default(0)
+  net      Decimal @db.Decimal(14, 2)
+
+  customerName  String?
+  customerEmail String?
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplace  Marketplace  @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  items        SaleItem[]
+
+  @@unique([marketplaceId, externalOrderId])
+  @@index([organizationId])
+  @@index([marketplaceId])
+  @@index([soldAt])
+}
+
+model SaleItem {
+  id        String   @id @default(cuid())
+  saleId    String
+  sku       String?
+  title     String
+  quantity  Int
+  unitPrice Decimal @db.Decimal(14, 2)
+  total     Decimal @db.Decimal(14, 2)
+
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  action         String   // ex: "CREATE_SALE", "UPDATE_USER"
+  entity         String   // ex: "Sale", "Marketplace"
+  entityId       String
+  details        String?
+  oldData        Json?    // Estado antes da mudança
+  newData        Json?    // Estado depois da mudança
+  userId         String
+  user           User     @relation(fields: [userId], references: id)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: id)
+  createdAt      DateTime @default(now())
+}

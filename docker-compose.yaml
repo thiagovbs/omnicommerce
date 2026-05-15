@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: omni-db-v2
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: omnicommerce
+    ports:
+      - "5433:5432" # Acesso externo via porta 5433
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: omni-app-v2
+    depends_on:
+      - db
+    ports:
+      - "4000:3000" # Acesso à aplicação via porta 4000
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/omnicommerce
+      - NODE_ENV=production
+    restart: always
+
+volumes:
+  postgres_data:
