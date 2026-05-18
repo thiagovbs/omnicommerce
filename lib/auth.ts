@@ -31,7 +31,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           id: user.id,
           name: user.name,
           email: user.email,
-          organizationId: user.organizationId, // Importante para o Multi-tenant
+          organizationId: user.organizationId,
           role: user.role,
         };
       },
@@ -40,14 +40,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.id = user.id;
+        token.id = user.id; // Garante que o ID do usuário está no token
         token.organizationId = (user as any).organizationId;
         token.role = (user as any).role;
       }
       return token;
     },
     async session({ session, token }) {
-      if (token) {
+      if (token && session.user) {
         (session.user as any).id = token.id;
         (session.user as any).organizationId = token.organizationId;
         (session.user as any).role = token.role;
@@ -55,7 +55,40 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return session;
     },
   },
-  pages: {
-    signIn: "/login",
+  
+  events: {
+    async signIn({ user }) {
+      try {
+        if (user && user.id) {
+          // Buscamos a organização do usuário diretamente, já que o objeto 'user' do evento pode vir limitado
+          const dbUser = await prisma.user.findUnique({
+            where: { id: user.id },
+            select: { organizationId: true, name: true, email: true }
+          });
+
+          if (dbUser) {
+            await prisma.auditLog.create({
+              data: {
+                action: "LOGIN",
+                entity: "USER",
+                entityId: user.id,
+                details: `Usuário ${dbUser.name || dbUser.email} efetuou login no sistema com sucesso.`,
+                oldData: {},
+                newData: { 
+                  loginAt: new Date(),
+                  email: dbUser.email 
+                },
+                userId: user.id,
+                organizationId: dbUser.organizationId,
+              },
+            });
+            console.log(`📝 [AUDIT]: Login registrado para o usuário ${user.id}`);
+          }
+        }
+      } catch (error) {
+        console.error("❌ Erro crítico ao registrar auditoria de login:", error);
+      }
+    },
   },
+  session: { strategy: "jwt" },
 });

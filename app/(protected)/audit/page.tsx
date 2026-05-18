@@ -8,11 +8,10 @@ import { AuditDetailModal } from "./audit-detail-modal";
 
 export const dynamic = "force-dynamic";
 
-// Recebemos searchParams para filtrar no banco de dados
 export default async function AuditPage({
   searchParams,
 }: {
-  searchParams: { user?: string; start?: string; end?: string; action?: string };
+  searchParams: Promise<{ user?: string; start?: string; end?: string; action?: string }>;
 }) {
   const session = await auth();
   const organizationId = (session?.user as any)?.organizationId;
@@ -21,21 +20,27 @@ export default async function AuditPage({
     redirect("/dashboard");
   }
 
-  // Construção do filtro dinâmico para o Prisma
+  
+  const params = await searchParams;
+
   const where: any = { organizationId };
 
-  if (searchParams.user) {
-    where.user = { name: { contains: searchParams.user, mode: 'insensitive' } };
+  if (params.user && params.user.trim() !== "") {
+    where.user = { name: { contains: params.user, mode: 'insensitive' } };
   }
 
-  if (searchParams.action) {
-    where.action = searchParams.action;
+  if (params.action && params.action.trim() !== "") {
+    where.action = params.action;
   }
 
-  if (searchParams.start || searchParams.end) {
+  if ((params.start && params.start.trim() !== "") || (params.end && params.end.trim() !== "")) {
     where.createdAt = {};
-    if (searchParams.start) where.createdAt.gte = new Date(searchParams.start);
-    if (searchParams.end) where.createdAt.lte = new Date(searchParams.end);
+    if (params.start && params.start.trim() !== "") {
+      where.createdAt.gte = new Date(params.start);
+    }
+    if (params.end && params.end.trim() !== "") {
+      where.createdAt.lte = new Date(params.end);
+    }
   }
 
   const [logs, users] = await Promise.all([
@@ -47,6 +52,8 @@ export default async function AuditPage({
     }),
     prisma.user.findMany({ where: { organizationId }, select: { name: true } })
   ]);
+
+  const currentQueryParams = new URLSearchParams(params as any).toString();
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-6">
@@ -61,9 +68,8 @@ export default async function AuditPage({
           </div>
         </div>
 
-        
         <a 
-          href="/api/reports/audit" 
+          href={`/api/reports/audit?${currentQueryParams}`} 
           target="_blank" 
           className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg flex items-center justify-center gap-2 hover:bg-gray-50 transition-all font-medium shadow-sm text-sm h-fit"
         >
@@ -71,13 +77,12 @@ export default async function AuditPage({
         </a>
       </div>
 
-      {/* SEGUNDA LINHA: FILTROS (Formulário Simples) */}
       <form className="bg-white p-4 border rounded-xl shadow-sm grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
         <div>
           <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Usuário</label>
           <input 
             name="user"
-            defaultValue={searchParams.user}
+            defaultValue={params.user || ""}
             placeholder="Nome do usuário..."
             className="w-full border rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
           />
@@ -87,7 +92,7 @@ export default async function AuditPage({
           <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Ação</label>
           <select 
             name="action"
-            defaultValue={searchParams.action}
+            defaultValue={params.action || ""}
             className="w-full border rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white"
           >
             <option value="">Todas as ações</option>
@@ -103,7 +108,7 @@ export default async function AuditPage({
           <input 
             name="start"
             type="datetime-local"
-            defaultValue={searchParams.start}
+            defaultValue={params.start || ""}
             className="w-full border rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
           />
         </div>
@@ -114,7 +119,7 @@ export default async function AuditPage({
             <input 
               name="end"
               type="datetime-local"
-              defaultValue={searchParams.end}
+              defaultValue={params.end || ""}
               className="w-full border rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
             />
           </div>
@@ -146,8 +151,8 @@ export default async function AuditPage({
                       <UserIcon size={14} />
                     </div>
                     <div>
-                      <div className="font-medium text-gray-900">{log.user.name}</div>
-                      <div className="text-[10px] text-gray-400">{log.user.email}</div>
+                      <div className="font-medium text-gray-900">{log.user?.name || "Sistema"}</div>
+                      <div className="text-[10px] text-gray-400">{log.user?.email || ""}</div>
                     </div>
                   </div>
                 </td>
@@ -162,25 +167,26 @@ export default async function AuditPage({
                   </div>
                 </td>
                 <td className="px-6 py-4">
-                  <div className="flex items-start gap-2 max-w-xs md:max-w-md">
-                    <Info size={14} className="text-gray-300 mt-0.5 flex-shrink-0" />
-                    <span className="text-gray-600 line-clamp-2 italic">
-                      {log.details || "Nenhum detalhe adicional."}
-                    </span>
-                  </div>
-                      {/* O Modal entra aqui! */}
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="flex items-start gap-2 max-w-xs md:max-w-md">
+                      <Info size={14} className="text-gray-300 mt-0.5 flex-shrink-0" />
+                      <span className="text-gray-600 line-clamp-2 italic">
+                        {log.details || "Nenhum detalhe adicional."}
+                      </span>
+                    </div>
                     <AuditDetailModal 
-                        action={log.action} 
-                        oldData={log.oldData} 
-                        newData={log.newData} 
+                      action={log.action} 
+                      oldData={log.oldData} 
+                      newData={log.newData} 
                     />
+                  </div>
                 </td>
               </tr>
             ))}
             {logs.length === 0 && (
               <tr>
                 <td colSpan={4} className="px-6 py-12 text-center text-gray-400">
-                  Nenhuma atividade registrada ainda.
+                  Nenhuma atividade registrada encontrada para os filtros aplicados.
                 </td>
               </tr>
             )}
@@ -191,13 +197,13 @@ export default async function AuditPage({
   );
 }
 
-// Função auxiliar para cores dos badges
 function cnActionBadge(action: string) {
   const base = "px-2 py-0.5 rounded text-[10px] font-bold w-fit";
   switch (action) {
     case "CREATE": return `${base} bg-green-100 text-green-700`;
     case "UPDATE": return `${base} bg-blue-100 text-blue-700`;
     case "DELETE": return `${base} bg-red-100 text-red-700`;
+    case "LOGIN": return `${base} bg-purple-100 text-purple-700`;
     default: return `${base} bg-gray-100 text-gray-700`;
   }
 }
