@@ -1,0 +1,71 @@
+import "server-only";
+import { timingSafeEqual } from "node:crypto";
+import { MarketplaceProvider, PrismaClient } from "@prisma/client";
+import { OrderError } from "../domain/order-input";
+import { readLimitedText } from "../http/limited-body";
+import { recordOrderEvent } from "../services/integration-events";
+
+export interface ParsedNotification {
+  /// Pedido a consultar no provedor.
+  orderId: string;
+  /// Conta ou loja no provedor: resolve a conexão e, por ela, o tenant.
+  externalAccountId: string;
+  /// Identidade estável do aviso; um reenvio traz a mesma.
+  externalEventId: string;
+}
+
+export interface NotificationHandler {
+  provider: MarketplaceProvider;
+  secret: string | undefined;
+  /// Devolve null quando o aviso não interessa (tópico alheio, outra aplicação).
+  parse: (body: unknown) => ParsedNotification | null;
+}
+
+function authorized(supplied: string, expected: string | undefined) {
+  if (!expected || expected.length < 32) return false;
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// Recepção comum a todos os provedores: autentica, valida, resolve a conexão e grava
+// o aviso cru com a pendência de publicação. Não consulta pedido nem aplica regra de
+// negócio — quem faz isso é o job, depois da fila.
+export async function handleProviderNotification(
+  db: PrismaClient, request: Request, suppliedSecret: string, handler: NotificationHandler,
+) {
+  // 404 em vez de 401: não confirma a existência do endpoint para quem adivinha a URL.
+  if (!authorized(suppliedSecret, handler.secret)) return new Response("Not found", { status: 404 });
+
+  let body: unknown;
+  let parsed: ParsedNotification | null;
+  try {
+    body = JSON.parse(await readLimitedText(request, 8192));
+    parsed = handler.parse(body);
+  } catch (error) {
+    return Response.json({ error: error instanceof OrderError ? error.message : "Aviso inválido." }, { status: 400 });
+  }
+  // Confirmado e descartado: 200 evita reenvio indefinido de algo que não nos serve.
+  if (!parsed) return Response.json({ status: "ignored" });
+
+  try {
+    const connection = await db.marketplaceConnection.findFirst({
+      where: { provider: handler.provider, externalAccountId: parsed.externalAccountId, status: "ACTIVE" },
+      select: { id: true, marketplaceId: true },
+    });
+    if (!connection) return Response.json({ status: "ignored" });
+    await recordOrderEvent(db, {
+      marketplaceId: connection.marketplaceId,
+      connectionId: connection.id,
+      externalEventId: parsed.externalEventId,
+      externalOrderId: parsed.orderId,
+      // Guarda o aviso como chegou: o que foi derivado dele vive nas colunas.
+      payload: body,
+    });
+    return Response.json({ status: "queued" });
+  } catch (error) {
+    if (error instanceof OrderError) return Response.json({ error: error.message }, { status: 400 });
+    // 500 faz o provedor reenviar: o aviso ainda não está durável.
+    return Response.json({ error: "Falha temporária na recepção." }, { status: 500 });
+  }
+}

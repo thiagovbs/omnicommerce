@@ -4,6 +4,8 @@ import { OrderSnapshotResolver } from "../services/integration-events";
 import { decryptSecret } from "./crypto";
 import { fetchOrder } from "./mercadolivre/client";
 import { normalizeMercadoLivreOrder } from "./mercadolivre/normalize";
+import { fetchSeboOrder } from "./sebo/client";
+import { normalizeSeboOrder } from "./sebo/normalize";
 
 // Consulta o pedido no provedor e devolve o snapshot; quem chama valida com
 // parseIntegratedOrder, fora de qualquer transação.
@@ -21,6 +23,10 @@ export function providerResolver(fetcher: typeof fetch = fetch): OrderSnapshotRe
       case "MERCADO_LIVRE":
         return normalizeMercadoLivreOrder(
           await fetchOrder(decryptSecret(connection.accessToken), event.externalOrderId, fetcher),
+        );
+      case "SEBO_ONLINE":
+        return normalizeSeboOrder(
+          await fetchSeboOrder(decryptSecret(connection.accessToken), event.externalOrderId, fetcher),
         );
       case "SHOPEE":
         throw new OrderError("Integração de pedidos da Shopee não implementada.");

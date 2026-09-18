@@ -45,6 +45,7 @@ enum AuditActorType {
 enum MarketplaceProvider {
   MERCADO_LIVRE
   SHOPEE
+  SEBO_ONLINE
 }
 
 enum ConnectionStatus {
