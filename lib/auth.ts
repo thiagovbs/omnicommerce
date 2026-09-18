@@ -37,6 +37,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       },
     }),
   ],
+  // Sem isto, uma credencial recusada cai na página interna do Auth.js
+  // (/api/auth/signin), que parece erro de sistema em vez de erro de login.
+  pages: {
+    signIn: "/login",
+    error: "/login",
+  },
+
   callbacks: {
     async jwt({ token, user }) {
       if (user?.id) {
