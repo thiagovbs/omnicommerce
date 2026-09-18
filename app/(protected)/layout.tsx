@@ -4,13 +4,6 @@ import { Sidebar } from "@/components/sidebar";
 import { Navbar } from "@/components/navbar";
 import { prisma } from "@/lib/prisma";
 
-import type { Metadata } from "next";
-
-export const metadata: Metadata = {
-  title: "OmniCommerce",
-  description: "Sistema de gestão multi-marketplace",
-};
-
 export default async function ProtectedLayout({
   children,
 }: {
