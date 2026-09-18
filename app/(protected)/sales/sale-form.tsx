@@ -1,22 +1,23 @@
 "use client";
 
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm, useFieldArray, useWatch } from "react-hook-form";
 import { createSale } from "./actions";
 import { Plus, Trash2, Loader2 } from "lucide-react";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
-export function SaleForm({ organizationId, marketplaces }: any) {
+export function SaleForm({ marketplaces }: { marketplaces: { id: string; name: string }[] }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isPending, setIsPending] = useState(false);
+  const [error, setError] = useState("");
+  const router = useRouter();
 
-  const { register, control, handleSubmit, watch, reset } = useForm({
+  const { register, control, handleSubmit, reset } = useForm({
     defaultValues: {
-      organizationId,
       marketplaceId: "",
       externalOrderId: "",
       status: "CREATED",
       soldAt: new Date().toISOString().split('T')[0],
-      gross: 0,
       shipping: 0,
       fees: 0,
       items: [{ title: "", quantity: 1, unitPrice: 0 }]
@@ -24,16 +25,20 @@ export function SaleForm({ organizationId, marketplaces }: any) {
   });
 
   const { fields, append, remove } = useFieldArray({ control, name: "items" });
+  const watchedItems = useWatch({ control, name: "items" });
+  const total = watchedItems.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unitPrice || 0), 0);
 
-  const onSubmit = async (data: any) => {
+  const onSubmit = async (data: unknown) => {
     setIsPending(true);
+    setError("");
     try {
-      await createSale(data);
+      const result = await createSale(data);
+      if (!result.ok) { setError(result.error); return; }
       setIsOpen(false);
       reset();
-      window.location.reload();
-    } catch (error) {
-      alert("Erro ao criar venda");
+      router.refresh();
+    } catch {
+      setError("Erro ao criar venda. Tente novamente.");
     } finally {
       setIsPending(false);
     }
@@ -59,7 +64,7 @@ export function SaleForm({ organizationId, marketplaces }: any) {
             <label className="block text-sm font-medium mb-1">Marketplace</label>
             <select {...register("marketplaceId")} className="w-full border rounded-lg p-2">
               <option value="">Selecione...</option>
-              {marketplaces.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              {marketplaces.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
           <div>
@@ -101,7 +106,7 @@ export function SaleForm({ organizationId, marketplaces }: any) {
           <div className="md:col-span-3 border-t pt-4 grid grid-cols-3 gap-4 bg-gray-50 p-4 rounded-lg">
             <div>
               <label className="block text-sm font-medium text-gray-600">Valor Bruto (Produtos)</label>
-              <input type="number" step="0.01" {...register("gross")} className="w-full border rounded-lg p-2 font-bold" />
+              <input aria-label="Valor bruto calculado" readOnly value={Number.isFinite(total) ? total.toFixed(2) : ""} className="w-full border rounded-lg p-2 font-bold" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600">Frete</label>
@@ -115,6 +120,7 @@ export function SaleForm({ organizationId, marketplaces }: any) {
         </div>
 
         <div className="p-6 border-t flex gap-3">
+          {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
           <button type="submit" disabled={isPending} className="flex-1 bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-700 flex items-center justify-center gap-2">
             {isPending && <Loader2 className="animate-spin" />} Salvar Venda
           </button>

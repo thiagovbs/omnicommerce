@@ -10,6 +10,9 @@ async function main() {
   const adminName = process.env.SEED_ADMIN_NAME ?? "Admin";
   const adminEmail = process.env.SEED_ADMIN_EMAIL ?? "admin@local.test";
   const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? "Admin123!";
+  const platformName = process.env.SEED_PLATFORM_ADMIN_NAME ?? "Operador da Plataforma";
+  const platformEmail = process.env.SEED_PLATFORM_ADMIN_EMAIL ?? "plataforma@local.test";
+  const platformPassword = process.env.SEED_PLATFORM_ADMIN_PASSWORD ?? "Plataforma123!";
 
   console.log("Iniciando seed...");
 
@@ -37,6 +40,24 @@ async function main() {
       },
     });
     console.log(`Usuário admin criado: ${adminEmail}`);
+  }
+
+  // 2b. Operador da plataforma: único perfil que administra outras organizações.
+  const existingPlatformAdmin = await prisma.user.findUnique({
+    where: { email: platformEmail },
+  });
+
+  if (!existingPlatformAdmin) {
+    await prisma.user.create({
+      data: {
+        organizationId: organization.id,
+        name: platformName,
+        email: platformEmail,
+        passwordHash: await hash(platformPassword, 10),
+        role: UserRole.PLATFORM_ADMIN,
+      },
+    });
+    console.log(`Operador da plataforma criado: ${platformEmail}`);
   }
 
   // 3. Marketplaces
@@ -78,6 +99,7 @@ async function main() {
         marketplaceId: mlMarketplace.id,
         externalOrderId: `ORDER-${Date.now()}`,
         status: SaleStatus.PAID,
+        statusHistory: { create: { toStatus: SaleStatus.PAID, source: "INITIALIZATION", version: 0, reason: "Pedido fictício criado pelo seed." } },
         soldAt: new Date(),
         currency: Currency.BRL,
         gross: gross,

@@ -3,8 +3,9 @@
 import { MarketplaceForm } from "./marketplace-form";
 import { deleteMarketplace } from "./actions";
 import { Trash2 } from "lucide-react";
+import type { MarketplaceRow } from "./types";
 
-export function MarketplacesClient({ initialData, organizationId }: any) {
+export function MarketplacesClient({ initialData }: { initialData: MarketplaceRow[] }) {
   return (
     <div className="max-w-5xl mx-auto p-8">
       <div className="flex justify-between items-end mb-8">
@@ -12,7 +13,7 @@ export function MarketplacesClient({ initialData, organizationId }: any) {
           <h1 className="text-3xl font-bold text-gray-900">Marketplaces</h1>
           <p className="text-gray-500 mt-1">Gerencie suas conexões de venda.</p>
         </div>
-        <MarketplaceForm organizationId={organizationId} />
+        <MarketplaceForm />
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
@@ -26,7 +27,7 @@ export function MarketplacesClient({ initialData, organizationId }: any) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {initialData.map((mp: any) => (
+            {initialData.map((mp) => (
               <tr key={mp.id} className="hover:bg-gray-50/50 transition-colors group">
                 <td className="px-6 py-4 text-sm text-gray-900 font-medium">{mp.name}</td>
                 <td className="px-6 py-4 text-sm text-gray-500 font-mono">{mp.code}</td>
@@ -38,7 +39,7 @@ export function MarketplacesClient({ initialData, organizationId }: any) {
                   </span>
                 </td>
                 <td className="px-6 py-4 text-right flex justify-end gap-2">
-                  <MarketplaceForm organizationId={organizationId} defaultValues={mp} />
+                  <MarketplaceForm defaultValues={mp} />
                   <button 
                     onClick={async () => {
                       if(confirm("Deseja realmente excluir?")) {

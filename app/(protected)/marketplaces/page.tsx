@@ -1,32 +1,19 @@
+import { currentActor } from "@/lib/current-actor";
 import { prisma } from "@/lib/prisma";
 import { MarketplacesClient } from "./marketplaces-client";
-import { auth } from "@/lib/auth";
-import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
 export default async function MarketplacesPage() {
-  const session = await auth();
-  
-  // 1. Obtemos o ID da organização da sessão
-  const organizationId = (session?.user as any)?.organizationId;
+  // currentActor resolve a organização no banco e lança se não houver sessão.
+  const { organizationId } = await currentActor();
 
-  // 2. Proteção: Se não houver organização, redirecionamos
-  if (!organizationId) {
-    redirect("/login");
-  }
-  
-  // 3. Buscamos os marketplaces usando o organizationId da sessão
-  const data = await prisma.marketplace.findMany({
-    where: { organizationId: organizationId }, // CORREÇÃO: Usando organizationId
+  // Apenas campos escalares: dispensa o round-trip por JSON para serializar ao cliente.
+  const marketplaces = await prisma.marketplace.findMany({
+    where: { organizationId },
     orderBy: { name: "asc" },
+    select: { id: true, name: true, code: true, active: true },
   });
 
-  return (
-    <MarketplacesClient 
-      // Usamos JSON.parse/stringify para evitar problemas de serialização de tipos Prisma (como Decimal)
-      initialData={JSON.parse(JSON.stringify(data))} 
-      organizationId={organizationId} // CORREÇÃO: Usando organizationId
-    />
-  );
+  return <MarketplacesClient initialData={marketplaces} />;
 }

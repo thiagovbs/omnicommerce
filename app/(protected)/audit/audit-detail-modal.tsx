@@ -5,20 +5,29 @@ import { Eye, X } from "lucide-react";
 
 interface AuditDetailModalProps {
   action: string;
-  oldData: any;
-  newData: any;
+  oldData: unknown;
+  newData: unknown;
+}
+
+// oldData/newData chegam como Json do Prisma: pode ser objeto, escalar, lista ou null.
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 export function AuditDetailModal({ action, oldData, newData }: AuditDetailModalProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const before = asRecord(oldData);
+  const after = asRecord(newData);
 
   // Se não houver dados para comparar (ex: um delete simples ou login)
-  if (!oldData && !newData) return null;
+  if (!before && !after) return null;
 
   // Pegamos todas as chaves únicas presentes em ambos os objetos
   const allKeys = Array.from(new Set([
-    ...Object.keys(oldData || {}),
-    ...Object.keys(newData || {})
+    ...Object.keys(before ?? {}),
+    ...Object.keys(after ?? {})
   ])).filter(key => key !== "updatedAt" && key !== "createdAt"); // Removemos metadados irrelevantes
 
   return (
@@ -49,8 +58,8 @@ export function AuditDetailModal({ action, oldData, newData }: AuditDetailModalP
 
               <div className="space-y-3">
                 {allKeys.map((key) => {
-                  const valOld = oldData?.[key];
-                  const valNew = newData?.[key];
+                  const valOld = before?.[key];
+                  const valNew = after?.[key];
                   const isChanged = JSON.stringify(valOld) !== JSON.stringify(valNew);
 
                   return (

@@ -1,67 +1,36 @@
 "use server";
 
-import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { hash } from "bcryptjs";
-import { UserRole } from "@prisma/client";
+import { currentActor } from "@/lib/current-actor";
+import { OrderError } from "@/lib/domain/order-input";
+import { prisma } from "@/lib/prisma";
+import { removeMember, upsertMember } from "@/lib/services/members";
 
-async function checkAdmin() {
-  const session = await auth();
-  if ((session?.user as any)?.role !== "ADMIN") {
-    throw new Error("Acesso negado: Somente administradores.");
+function failure(error: unknown) {
+  if (error instanceof OrderError) return { ok: false as const, error: error.message };
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    return { ok: false as const, error: "Já existe um usuário com esse e-mail." };
   }
-  return session;
+  return { ok: false as const, error: "Não foi possível salvar. Tente novamente." };
 }
 
-export async function getUsers(organizationId: string) {
-  await checkAdmin(); // Valida antes de qualquer operação
-  return await prisma.user.findMany({
-    where: { organizationId },
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      role: true,
-      createdAt: true,
-    }
-  });
+function refreshUsers() {
+  for (const path of ["/users", "/audit"]) revalidatePath(path);
 }
 
-export async function upsertUser(data: any) {
-  const { id, name, email, password, role, organizationId } = data;
-
-  if (id) {
-    // Edição
-    await prisma.user.update({
-      where: { id },
-      data: { 
-        name, 
-        email, 
-        role, 
-        organizationId 
-      },
-    });
-  } else {
-    // Criação
-    const passwordHash = await hash(password || "Padrao123!", 10);
-    await prisma.user.create({
-      data: {
-        name,
-        email,
-        passwordHash,
-        role,
-        organizationId,
-      },
-    });
-  }
-
-  revalidatePath("/users");
+export async function upsertUser(data: unknown) {
+  try {
+    const user = await upsertMember(prisma, await currentActor(), data);
+    refreshUsers();
+    return { ok: true as const, user };
+  } catch (error) { return failure(error); }
 }
 
 export async function deleteUser(id: string) {
-  await checkAdmin(); // Valida antes de qualquer operação
-  await prisma.user.delete({ where: { id } });
-  revalidatePath("/users");
+  try {
+    await removeMember(prisma, await currentActor(), id);
+    refreshUsers();
+    return { ok: true as const };
+  } catch (error) { return failure(error); }
 }

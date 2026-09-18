@@ -1,36 +1,36 @@
 "use server";
 
-import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { auth } from "@/lib/auth";
+import { currentActor } from "@/lib/current-actor";
+import { OrderError } from "@/lib/domain/order-input";
+import { prisma } from "@/lib/prisma";
+import { removeOrganization, upsertOrganization as upsert } from "@/lib/services/organizations";
 
-async function checkAdmin() {
-  const session = await auth();
-  if ((session?.user as any)?.role !== "ADMIN") {
-    throw new Error("Acesso negado.");
+function failure(error: unknown) {
+  if (error instanceof OrderError) return { ok: false as const, error: error.message };
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+    return { ok: false as const, error: "A organização ainda possui registros vinculados." };
   }
+  return { ok: false as const, error: "Não foi possível salvar. Tente novamente." };
 }
 
-export async function upsertOrganization(data: { id?: string; name: string }) {
-  await checkAdmin();
+function refreshOrganizations() {
+  for (const path of ["/organizations", "/users", "/audit"]) revalidatePath(path);
+}
 
-  if (data.id) {
-    await prisma.organization.update({
-      where: { id: data.id },
-      data: { name: data.name },
-    });
-  } else {
-    await prisma.organization.create({
-      data: { name: data.name },
-    });
-  }
-
-  revalidatePath("/organizations");
+export async function upsertOrganization(data: unknown) {
+  try {
+    const organization = await upsert(prisma, await currentActor(), data);
+    refreshOrganizations();
+    return { ok: true as const, organization };
+  } catch (error) { return failure(error); }
 }
 
 export async function deleteOrganization(id: string) {
-  await checkAdmin();
-  // Nota: Isso falhará se houver usuários ou vendas vinculadas (Foreign Key)
-  await prisma.organization.delete({ where: { id } });
-  revalidatePath("/organizations");
+  try {
+    await removeOrganization(prisma, await currentActor(), id);
+    refreshOrganizations();
+    return { ok: true as const };
+  } catch (error) { return failure(error); }
 }

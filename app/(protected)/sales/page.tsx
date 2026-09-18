@@ -1,17 +1,14 @@
 import { prisma } from "@/lib/prisma";
 import { SaleForm } from "./sale-form";
 import { format } from "date-fns";
-import { auth } from "@/lib/auth";
+import { currentActor } from "@/lib/current-actor";
 import { StatusSelect } from "./status-select";
 import { FileDown } from "lucide-react"; //
 
 export const dynamic = "force-dynamic";
 
 export default async function SalesPage() {
-  const session = await auth();
-  
-  // Extrai o ID da organização do usuário logado
-  const organizationId = (session?.user as any)?.organizationId;
+  const { organizationId } = await currentActor();
 
   if (!organizationId) {
     return <div className="p-8">Acesso negado ou organização não encontrada.</div>;
@@ -21,7 +18,10 @@ export default async function SalesPage() {
   const [allSales, marketplaces] = await Promise.all([
     prisma.sale.findMany({
       where: { organizationId },
-      include: { marketplace: true },
+      include: { marketplace: true, statusHistory: {
+        orderBy: { version: "desc" }, take: 10,
+        include: { changedBy: { select: { name: true } } },
+      } },
       orderBy: { soldAt: "desc" }
     }),
     prisma.marketplace.findMany({ 
@@ -42,7 +42,7 @@ export default async function SalesPage() {
           >
             <FileDown size={18} /> Exportar PDF
           </a>
-          <SaleForm organizationId={organizationId} marketplaces={marketplaces} />
+          <SaleForm marketplaces={marketplaces.map(({ id, name }) => ({ id, name }))} />
         </div>
       </div>
 
@@ -65,7 +65,22 @@ export default async function SalesPage() {
                     {format(new Date(sale.soldAt), "dd/MM/yyyy")}
                   </td>
                   <td className="px-6 py-4 text-sm">{sale.marketplace.name}</td>
-                  <td className="px-6 py-4 text-sm font-mono">{sale.externalOrderId}</td>
+                  <td className="px-6 py-4 text-sm">
+                    <span className="font-mono">{sale.externalOrderId}</span>
+                    <details className="mt-1 text-xs text-gray-500">
+                      <summary className="cursor-pointer">Histórico de status</summary>
+                      <ol className="mt-2 space-y-2">
+                        {sale.statusHistory.map((entry) => (
+                          <li key={entry.id}>
+                            {entry.fromStatus ? `${entry.fromStatus} → ` : ""}{entry.toStatus}
+                            <div>{format(entry.recordedAt, "dd/MM/yyyy HH:mm")} · {entry.changedBy?.name ?? (entry.source === "INTEGRATION" ? "Integração" : entry.source === "INITIALIZATION" ? "Estado inicial" : "Usuário removido")}</div>
+                          </li>
+                        ))}
+                      </ol>
+                      {!sale.statusHistory.length && <p>Nenhum registro disponível.</p>}
+                      {sale.statusHistory.length === 10 && <p>Exibindo os 10 registros mais recentes.</p>}
+                    </details>
+                  </td>
                   <td className="px-6 py-4 text-sm text-right font-bold text-green-700">
                     R$ {Number(sale.net).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                   </td>
@@ -73,6 +88,7 @@ export default async function SalesPage() {
                     <StatusSelect 
                       saleId={sale.id} 
                       currentStatus={sale.status} 
+                      statusVersion={sale.statusVersion}
                     />
                   </td>
                 </tr>

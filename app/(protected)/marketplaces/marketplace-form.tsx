@@ -4,41 +4,30 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { upsertMarketplace } from "./actions";
 import { Plus, Pencil, Loader2 } from "lucide-react";
+import type { MarketplaceInput, MarketplaceRow } from "./types";
 
 interface MarketplaceFormProps {
-  organizationId: string;
-  defaultValues?: {
-    id: string;
-    name: string;
-    code: string;
-    active: boolean;
-  };
+  defaultValues?: MarketplaceRow;
 }
 
-export function MarketplaceForm({ organizationId, defaultValues }: MarketplaceFormProps) {
+export function MarketplaceForm({ defaultValues }: MarketplaceFormProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isPending, setIsPending] = useState(false);
   
-  const { register, handleSubmit, reset } = useForm({
-    defaultValues: defaultValues || {
-      name: "",
-      code: "",
-      active: true
-    }
+  const { register, handleSubmit, reset } = useForm<MarketplaceInput>({
+    defaultValues: defaultValues
+      ? { name: defaultValues.name, code: defaultValues.code, active: defaultValues.active }
+      : { name: "", code: "", active: true }
   });
 
-  const onSubmit = async (data: any) => {
+  const onSubmit = async (data: MarketplaceInput) => {
     setIsPending(true);
     try {
-      await upsertMarketplace({
-        ...data,
-        id: defaultValues?.id,
-        organizationId
-      });
+      await upsertMarketplace({ ...data, id: defaultValues?.id });
       setIsOpen(false);
       if (!defaultValues) reset();
       window.location.reload(); // Revalidação simples
-    } catch (error) {
+    } catch {
       alert("Erro ao salvar marketplace");
     } finally {
       setIsPending(false);

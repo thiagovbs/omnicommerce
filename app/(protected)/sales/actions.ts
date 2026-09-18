@@ -1,91 +1,45 @@
 "use server";
 
-import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
-import { recordAudit } from "@/lib/audit";
+import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
-import { SaleStatus, Currency } from "@prisma/client";
+import { currentActor } from "@/lib/current-actor";
+import { OrderError } from "@/lib/domain/order-input";
+import { prisma } from "@/lib/prisma";
+import { createManualOrder, changeManualStatus } from "@/lib/services/sales";
 
-export async function getSales(organizationId: string) {
-  return await prisma.sale.findMany({
-    where: { organizationId },
-    include: { marketplace: true, items: true },
-    orderBy: { soldAt: "desc" },
-  });
-}
-
-export async function createSale(data: any) {
-  const { items, ...saleData } = data;
-
-  // Cálculo do valor líquido (Net) antes de salvar 
-  // Net = Gross + Shipping - Discount - Fees
-  const gross = Number(saleData.gross);
-  const shipping = Number(saleData.shipping || 0);
-  const discount = Number(saleData.discount || 0);
-  const fees = Number(saleData.fees || 0);
-  const net = gross + shipping - discount - fees;
-
-  const newSale = await prisma.sale.create({
-    data: {
-      ...saleData,
-      status: "CREATED",
-      soldAt: new Date(saleData.soldAt),
-      net: net,
-      items: {
-        create: items.map((item: any) => ({
-          ...item,
-          total: Number(item.unitPrice) * Number(item.quantity)
-        }))
-      }
-    }
-  });
-
-  // REGISTRO DE AUDITORIA
-  await recordAudit({
-    action: "CREATE",
-    entity: "SALE",
-    entityId: newSale.id,
-    details: `Venda ${newSale.externalOrderId} criada manualmente.`,
-    newData: newSale
-  });
-
-  revalidatePath("/sales");
-}
-
-export async function updateSaleStatus(saleId: string, newStatus: string) {
-  const session = await auth();
-  const organizationId = (session?.user as any)?.organizationId;
-
-  // Busca a venda para auditoria
-  const oldSale = await prisma.sale.findUnique({
-    where: { id: saleId, organizationId }
-  });
-
-  if (!oldSale) throw new Error("Venda não encontrada");
-
-  if (oldSale && ["CANCELLED", "REFUNDED","DELIVERED"].includes(oldSale.status)) {
-    throw new Error("Vendas entregues, canceladas ou reembolsadas não podem ser editadas.");
+function failure(error: unknown) {
+  if (error instanceof OrderError) return { ok: false as const, error: error.message };
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    return { ok: false as const, error: "Já existe um pedido com esse identificador no marketplace." };
   }
+  return { ok: false as const, error: "Não foi possível salvar. Tente novamente." };
+}
 
-  // Atualização com o valor exato do Enum
-  const updatedSale = await prisma.sale.update({
-    where: { id: saleId },
-    data: { 
-      status: newStatus as any 
-    }
-  });
+function refreshSales() {
+  for (const path of ["/sales", "/dashboard", "/audit"]) revalidatePath(path);
+}
 
-  // Registro detalhado no Log de Auditoria
-  await recordAudit({
-    action: "UPDATE",
-    entity: "SALE",
-    entityId: updatedSale.id,
-    details: `Status da venda ${updatedSale.externalOrderId} alterado: ${oldSale.status} -> ${newStatus}`,
-    oldData: { status: oldSale.status },
-    newData: { status: updatedSale.status }
-  });
+export async function getSales() {
+  const actor = await currentActor();
+  const sales = await prisma.sale.findMany({ where: { organizationId: actor.organizationId }, include: { marketplace: true, items: true }, orderBy: { soldAt: "desc" } });
+  return sales.map((sale) => ({ ...sale,
+    gross: sale.gross.toFixed(2), shipping: sale.shipping.toFixed(2), discount: sale.discount.toFixed(2), fees: sale.fees.toFixed(2), net: sale.net.toFixed(2),
+    items: sale.items.map((item) => ({ ...item, unitPrice: item.unitPrice.toFixed(2), total: item.total.toFixed(2) })),
+  }));
+}
 
-  revalidatePath("/sales");
-  revalidatePath("/audit");
-  return updatedSale;
+export async function createSale(data: unknown) {
+  try {
+    const sale = await createManualOrder(prisma, await currentActor(), data);
+    refreshSales();
+    return { ok: true as const, sale };
+  } catch (error) { return failure(error); }
+}
+
+export async function updateSaleStatus(saleId: string, newStatus: string, expectedVersion: number) {
+  try {
+    const sale = await changeManualStatus(prisma, await currentActor(), saleId, newStatus, expectedVersion);
+    refreshSales();
+    return { ok: true as const, sale };
+  } catch (error) { return failure(error); }
 }

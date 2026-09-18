@@ -5,9 +5,11 @@ import {
   PieChart, Pie, Cell 
 } from "recharts";
 
+import type { DashboardStats } from "./types";
+
 const COLORS = ["#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"];
 
-export function DashboardCharts({ stats }: { stats: any }) {
+export function DashboardCharts({ stats }: { stats: DashboardStats }) {
   // Dados para o Gráfico de Comparação (Bruto vs Líquido)
   const comparisonData = [
     { name: "Financeiro", Bruto: stats.totalGross, Líquido: stats.totalNet }
@@ -43,9 +45,9 @@ export function DashboardCharts({ stats }: { stats: any }) {
               cx="50%"
               cy="50%"
               outerRadius={100}
-              label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+              label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
             >
-              {stats.marketplaceStats.map((entry: any, index: number) => (
+              {stats.marketplaceStats.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
               ))}
             </Pie>

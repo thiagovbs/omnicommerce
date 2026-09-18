@@ -12,24 +12,28 @@ import {
   Building2, 
   History 
 } from "lucide-react";
+import { isOrgAdmin } from "@/lib/domain/roles";
 import { cn } from "@/lib/utils";
 
+const everyone = () => true;
+
 const menuItems = [
-  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, adminOnly: false },
-  { name: "Vendas", href: "/sales", icon: ShoppingBag, adminOnly: false },
-  { name: "Marketplaces", href: "/marketplaces", icon: Store, adminOnly: false },
-  { name: "Equipe", href: "/users", icon: Users, adminOnly: true },
-  { name: "Organizações", href: "/organizations", icon: Building2, adminOnly: true }, 
-  { name: "Auditoria", href: "/audit", icon: History, adminOnly: true },
+  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, visible: everyone },
+  { name: "Vendas", href: "/sales", icon: ShoppingBag, visible: everyone },
+  { name: "Marketplaces", href: "/marketplaces", icon: Store, visible: everyone },
+  { name: "Integrações", href: "/integrations", icon: History, visible: isOrgAdmin },
+  { name: "Equipe", href: "/users", icon: Users, visible: isOrgAdmin },
+  { name: "Organizações", href: "/organizations", icon: Building2, visible: isOrgAdmin },
+  { name: "Auditoria", href: "/audit", icon: History, visible: isOrgAdmin },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
 
   if (status === "loading") return <div className="w-64 bg-slate-900" />;
 
-  const userRole = (session?.user as any)?.role;
+  const userRole = (session?.user as { role?: string } | undefined)?.role;
 
   return (
     <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col h-screen sticky top-0">
@@ -40,7 +44,8 @@ export function Sidebar() {
 
       <nav className="flex-1 px-4 space-y-1">
         {menuItems.map((item) => {
-          if (item.adminOnly && userRole !== "ADMIN") return null;
+          // Cosmetic only: every route and action authorizes again on the server.
+          if (!item.visible(userRole)) return null;
           const isActive = pathname === item.href;
           return (
             <Link

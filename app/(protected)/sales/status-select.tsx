@@ -3,16 +3,23 @@
 import { updateSaleStatus } from "./actions";
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { allowedStatusChanges, OrderStatus } from "@/lib/domain/sale-status";
 
-export function StatusSelect({ saleId, currentStatus }: { saleId: string, currentStatus: string }) {
+export function StatusSelect({ saleId, currentStatus, statusVersion }: { saleId: string; currentStatus: OrderStatus; statusVersion: number }) {
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const router = useRouter();
 
   const handleChange = async (newStatus: string) => {
     setLoading(true);
+    setError("");
     try {
-      await updateSaleStatus(saleId, newStatus);
-    } catch (error) {
-      alert("Erro ao atualizar status");
+      const result = await updateSaleStatus(saleId, newStatus, statusVersion);
+      if (!result.ok) setError(result.error);
+      router.refresh();
+    } catch {
+      setError("Erro ao atualizar status. Tente novamente.");
     } finally {
       setLoading(false);
     }
@@ -39,19 +46,17 @@ export function StatusSelect({ saleId, currentStatus }: { saleId: string, curren
     <div className="relative flex items-center">
       {loading && <Loader2 className="absolute -left-6 animate-spin text-blue-600" size={16} />}
       <select
-        defaultValue={currentStatus}
-        disabled={loading}
+        aria-label="Status do pedido"
+        value={currentStatus}
+        disabled={loading || allowedStatusChanges(currentStatus).length === 0}
         onChange={(e) => handleChange(e.target.value)}
         className={`text-[10px] font-bold py-1 px-2 rounded-full border-none cursor-pointer focus:ring-2 focus:ring-blue-500 transition-colors ${getStatusColor(currentStatus)}`}
       >
-        <option value="CREATED">CREATED</option>
-        <option value="PAID">PAID</option>
-        <option value="INVOICED">INVOICED</option>
-        <option value="SHIPPED">SHIPPED</option>
-        <option value="DELIVERED">DELIVERED</option>
-        <option value="CANCELLED">CANCELLED</option>
-        <option value="REFUNDED">REFUNDED</option>
+        {[currentStatus, ...allowedStatusChanges(currentStatus)].map((status) => (
+          <option key={status} value={status}>{status}</option>
+        ))}
       </select>
+      {error && <span role="alert" className="ml-2 max-w-xs text-xs text-red-600">{error}</span>}
     </div>
   );
 }

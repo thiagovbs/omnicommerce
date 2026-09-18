@@ -24,7 +24,7 @@ export default async function ProtectedLayout({
 
   // Buscamos o nome da organização para exibir na Navbar
   const org = await prisma.organization.findUnique({
-    where: { id: (session.user as any).organizationId }
+    where: { id: session.user.organizationId }
   });
 
   return (

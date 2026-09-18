@@ -1,31 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { currentActor } from "@/lib/current-actor";
+import { auditFilter } from "@/lib/domain/audit-filter";
+import { isOrgAdmin } from "@/lib/domain/roles";
 import { prisma } from "@/lib/prisma";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { format } from "date-fns";
 
 export async function GET(req: NextRequest) {
-  const session = await auth();
-  const orgId = (session?.user as any)?.organizationId;
-  if (!orgId) return new NextResponse("Não autorizado", { status: 401 });
-
-  // Pegar filtros da URL
-  const { searchParams } = new URL(req.url);
-  const user = searchParams.get("user");
-  const action = searchParams.get("action");
-  const start = searchParams.get("start");
-  const end = searchParams.get("end");
-
-  // Construir o WHERE idêntico ao da página
-  const where: any = { organizationId: orgId };
-  if (user) where.user = { name: { contains: user, mode: 'insensitive' } };
-  if (action) where.action = action;
-  if (start || end) {
-    where.createdAt = {};
-    if (start) where.createdAt.gte = new Date(start);
-    if (end) where.createdAt.lte = new Date(end);
+  let orgId: string;
+  try {
+    const actor = await currentActor();
+    if (!isOrgAdmin(actor.role)) return new NextResponse("Não autorizado", { status: 403 });
+    orgId = actor.organizationId;
+  } catch {
+    return new NextResponse("Não autorizado", { status: 401 });
   }
+
+  const { searchParams } = new URL(req.url);
+  const where = auditFilter(orgId, {
+    user: searchParams.get("user"),
+    action: searchParams.get("action"),
+    start: searchParams.get("start"),
+    end: searchParams.get("end"),
+  });
 
   try {
     const logs = await prisma.auditLog.findMany({
@@ -42,7 +40,7 @@ export async function GET(req: NextRequest) {
 
     const rows = logs.map(l => [
       format(new Date(l.createdAt), "dd/MM/yyyy HH:mm"),
-      l.user.name || l.user.email,
+      l.user?.name || l.user?.email || "Integração",
       l.action,
       l.entity,
       l.details || ""
@@ -61,7 +59,7 @@ export async function GET(req: NextRequest) {
     return new NextResponse(pdfOutput, {
       headers: { "Content-Type": "application/pdf" }
     });
-  } catch (e) {
+  } catch {
     return new NextResponse("Erro", { status: 500 });
   }
 }

@@ -39,18 +39,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
   callbacks: {
     async jwt({ token, user }) {
-      if (user) {
+      if (user?.id) {
         token.id = user.id; // Garante que o ID do usuário está no token
-        token.organizationId = (user as any).organizationId;
-        token.role = (user as any).role;
+        token.organizationId = user.organizationId;
+        token.role = user.role;
       }
       return token;
     },
     async session({ session, token }) {
-      if (token && session.user) {
-        (session.user as any).id = token.id;
-        (session.user as any).organizationId = token.organizationId;
-        (session.user as any).role = token.role;
+      if (session.user) {
+        session.user.id = token.id;
+        session.user.organizationId = token.organizationId;
+        session.user.role = token.role;
       }
       return session;
     },

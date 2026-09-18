@@ -10,6 +10,7 @@ datasource db {
 enum UserRole {
   ADMIN
   OPERATOR
+  PLATFORM_ADMIN
 }
 
 enum SaleStatus {
@@ -20,6 +21,46 @@ enum SaleStatus {
   DELIVERED
   CANCELLED
   REFUNDED
+}
+
+enum SaleSource {
+  MANUAL
+  INTEGRATION
+}
+
+enum SaleStatusChangeSource {
+  MANUAL
+  INTEGRATION
+  INITIALIZATION
+}
+
+enum AuditActorType {
+  USER
+  INTEGRATION
+}
+
+enum MarketplaceProvider {
+  MERCADO_LIVRE
+  SHOPEE
+}
+
+enum ConnectionStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+}
+
+enum IntegrationEventStatus {
+  PENDING
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
 }
 
 enum Currency {
@@ -33,7 +74,7 @@ model Organization {
   name         String
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
-  auditLogs AuditLog[]
+  auditLogs    AuditLog[]
   users        User[]
   marketplaces Marketplace[]
   sales        Sale[]
@@ -49,8 +90,9 @@ model User {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  auditLogs AuditLog[]
+  organization      Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  auditLogs         AuditLog[]
+  saleStatusChanges SaleStatusHistory[]
 
   @@index([organizationId])
 }
@@ -64,8 +106,10 @@ model Marketplace {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  sales        Sale[]
+  organization      Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sales             Sale[]
+  integrationEvents IntegrationEvent[]
+  connections       MarketplaceConnection[]
 
   @@unique([organizationId, code])
   @@index([organizationId])
@@ -80,10 +124,21 @@ model Sale {
   soldAt          DateTime
   currency        Currency   @default(BRL)
 
+  /// How the order entered OmniCommerce; independent of the marketplace channel.
+  source            SaleSource @default(MANUAL)
+  /// Original marketplace status, kept separately from the normalized status.
+  externalStatus    String?
+  /// Timestamp supplied by the marketplace, not the webhook reception time.
+  externalUpdatedAt DateTime?
+  /// Last successful synchronization with the marketplace.
+  lastSyncedAt      DateTime?
+  /// Increment atomically when changing status to detect concurrent updates.
+  statusVersion     Int        @default(0)
+
   gross    Decimal @db.Decimal(14, 2)
-  shipping Decimal @db.Decimal(14, 2) @default(0)
-  discount Decimal @db.Decimal(14, 2) @default(0)
-  fees     Decimal @db.Decimal(14, 2) @default(0)
+  shipping Decimal @default(0) @db.Decimal(14, 2)
+  discount Decimal @default(0) @db.Decimal(14, 2)
+  fees     Decimal @default(0) @db.Decimal(14, 2)
   net      Decimal @db.Decimal(14, 2)
 
   customerName  String?
@@ -92,41 +147,147 @@ model Sale {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  marketplace  Marketplace  @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
-  items        SaleItem[]
+  organization  Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  marketplace   Marketplace         @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  items         SaleItem[]
+  statusHistory SaleStatusHistory[]
 
   @@unique([marketplaceId, externalOrderId])
   @@index([organizationId])
   @@index([marketplaceId])
   @@index([soldAt])
+  @@index([organizationId, status, soldAt])
 }
 
 model SaleItem {
-  id        String   @id @default(cuid())
-  saleId    String
-  sku       String?
-  title     String
-  quantity  Int
-  unitPrice Decimal @db.Decimal(14, 2)
-  total     Decimal @db.Decimal(14, 2)
+  id                  String  @id @default(cuid())
+  saleId              String
+  sku                 String?
+  externalItemId      String?
+  externalVariationId String?
+  title               String
+  quantity            Int
+  unitPrice           Decimal @db.Decimal(14, 2)
+  total               Decimal @db.Decimal(14, 2)
 
   sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
 
   @@index([saleId])
 }
 
+/// Append-only status journal. Organization is resolved through Sale.
+/// Write the order status and this entry in the same database transaction.
+model SaleStatusHistory {
+  id              String                 @id @default(cuid())
+  saleId          String
+  fromStatus      SaleStatus?
+  toStatus        SaleStatus
+  source          SaleStatusChangeSource
+  /// Version 0 is the initial snapshot; subsequent changes increment the version.
+  version         Int
+  /// Namespaced provider event identifier. Null for manual changes/snapshots.
+  externalEventId String?
+  externalStatus  String?
+  /// When the change occurred at the source; unknown for legacy snapshots.
+  occurredAt      DateTime?
+  /// When OmniCommerce recorded the entry.
+  recordedAt      DateTime               @default(now())
+  changedById     String?
+  reason          String?
+
+  sale      Sale  @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  changedBy User? @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@unique([saleId, version])
+  @@unique([saleId, externalEventId])
+  @@index([saleId, recordedAt])
+  @@index([changedById])
+}
+
 model AuditLog {
-  id             String   @id @default(cuid())
-  action         String   // ex: "CREATE_SALE", "UPDATE_USER"
-  entity         String   // ex: "Sale", "Marketplace"
-  entityId       String
-  details        String?
-  oldData        Json?    // Estado antes da mudança
-  newData        Json?    // Estado depois da mudança
-  userId         String
-  user           User     @relation(fields: [userId], references: id)
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: id)
-  createdAt      DateTime @default(now())
+  id                 String            @id @default(cuid())
+  action             String // ex: "CREATE_SALE", "UPDATE_USER"
+  entity             String // ex: "Sale", "Marketplace"
+  entityId           String
+  details            String?
+  oldData            Json? // Estado antes da mudança
+  newData            Json? // Estado depois da mudança
+  actorType          AuditActorType    @default(USER)
+  userId             String?
+  user               User?             @relation(fields: [userId], references: id)
+  integrationEventId String?
+  integrationEvent   IntegrationEvent? @relation(fields: [integrationEventId], references: [id], onDelete: SetNull)
+  organizationId     String
+  organization       Organization      @relation(fields: [organizationId], references: id)
+  createdAt          DateTime          @default(now())
+
+  @@index([integrationEventId])
+}
+
+/// Raw provider notification as received. The processing job resolves it into an order
+/// snapshot through the provider adapter; nothing here is trusted as normalized data.
+model IntegrationEvent {
+  id              String                 @id @default(cuid())
+  marketplaceId   String
+  /// Authorized account the notification arrived for. Null for events recorded without one.
+  connectionId    String?
+  externalEventId String
+  externalOrderId String
+  payload         Json
+  status          IntegrationEventStatus @default(PENDING)
+  attempts        Int                    @default(0)
+  lastError       String?
+  receivedAt      DateTime               @default(now())
+  processedAt     DateTime?
+  marketplace     Marketplace            @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  connection      MarketplaceConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  outbox          OutboxMessage?
+  auditLogs       AuditLog[]
+
+  @@unique([marketplaceId, externalEventId])
+  @@index([marketplaceId, externalOrderId])
+  @@index([status, receivedAt])
+  @@index([connectionId])
+}
+
+/// One authorized seller account on a provider. Credentials are stored encrypted and are
+/// never sent to the browser; the organization is resolved through the marketplace.
+model MarketplaceConnection {
+  id                String              @id @default(cuid())
+  marketplaceId     String
+  provider          MarketplaceProvider
+  /// Seller/shop identifier at the provider (Mercado Livre user_id, Shopee shop_id).
+  externalAccountId String
+  status            ConnectionStatus    @default(ACTIVE)
+  /// AES-256-GCM ciphertext. Never log, never return in a server action payload.
+  accessToken       String?
+  refreshToken      String?
+  /// Access token expiry as reported by the provider.
+  expiresAt         DateTime?
+  lastSyncedAt      DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  marketplace       Marketplace        @relation(fields: [marketplaceId], references: [id], onDelete: Cascade)
+  integrationEvents IntegrationEvent[]
+
+  /// A provider account belongs to exactly one connection, so a notification maps to one tenant.
+  @@unique([provider, externalAccountId])
+  @@index([marketplaceId])
+}
+
+model OutboxMessage {
+  id          String           @id @default(cuid())
+  eventId     String           @unique
+  status      OutboxStatus     @default(PENDING)
+  attempts    Int              @default(0)
+  availableAt DateTime         @default(now())
+  leaseUntil  DateTime?
+  leaseToken  String?
+  publishedAt DateTime?
+  lastError   String?
+  createdAt   DateTime         @default(now())
+  event       IntegrationEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([status, availableAt, leaseUntil])
 }

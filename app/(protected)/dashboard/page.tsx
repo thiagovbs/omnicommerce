@@ -1,30 +1,18 @@
 import { prisma } from "@/lib/prisma";
 import { getDashboardStats } from "./actions";
 import { DollarSign, ShoppingCart, TrendingUp, Store } from "lucide-react";
-import { DashboardCharts } from "./charts"; 
-import { auth } from "@/lib/auth";
-import { redirect } from "next/navigation";
+import { DashboardCharts } from "./charts";
+import { currentActor } from "@/lib/current-actor";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const session = await auth();
-  
-  // 1. Extraímos o ID da organização da sessão
-  const organizationId = (session?.user as any)?.organizationId;
+  // currentActor resolves the organization from the database and throws when unauthenticated.
+  const { organizationId } = await currentActor();
 
-  // 2. Proteção: Se não houver ID, redirecionamos para o login
-  if (!organizationId) {
-    redirect("/login");
-  }
-
-  // 3. Buscamos os dados da organização e as estatísticas em paralelo
-  // CORREÇÃO: Definindo a variável 'org' que faltava
   const [org, stats] = await Promise.all([
-    prisma.organization.findUnique({
-      where: { id: organizationId }
-    }),
-    getDashboardStats(organizationId) // CORREÇÃO: Usando organizationId em vez de org.id
+    prisma.organization.findUnique({ where: { id: organizationId }, select: { name: true } }),
+    getDashboardStats(),
   ]);
 
   if (!org) {
@@ -90,7 +78,7 @@ export default async function DashboardPage() {
         </div>
         
         <div className="space-y-4">
-          {stats.marketplaceStats.map((item: any, i: number) => (
+          {stats.marketplaceStats.map((item, i) => (
             <div key={i} className="space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="font-medium text-gray-700">{item.name}</span>

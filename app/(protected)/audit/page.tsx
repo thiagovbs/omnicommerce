@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma";
-import { auth } from "@/lib/auth";
+import { currentActor } from "@/lib/current-actor";
+import { auditFilter } from "@/lib/domain/audit-filter";
+import { isOrgAdmin } from "@/lib/domain/roles";
 import { redirect } from "next/navigation";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -13,47 +15,23 @@ export default async function AuditPage({
 }: {
   searchParams: Promise<{ user?: string; start?: string; end?: string; action?: string }>;
 }) {
-  const session = await auth();
-  const organizationId = (session?.user as any)?.organizationId;
-
-  if ((session?.user as any)?.role !== "ADMIN") {
-    redirect("/dashboard");
-  }
+  const actor = await currentActor();
+  if (!isOrgAdmin(actor.role)) redirect("/dashboard");
+  const organizationId = actor.organizationId;
 
   
   const params = await searchParams;
 
-  const where: any = { organizationId };
+  const logs = await prisma.auditLog.findMany({
+    where: auditFilter(organizationId, params),
+    include: { user: { select: { name: true, email: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
 
-  if (params.user && params.user.trim() !== "") {
-    where.user = { name: { contains: params.user, mode: 'insensitive' } };
-  }
-
-  if (params.action && params.action.trim() !== "") {
-    where.action = params.action;
-  }
-
-  if ((params.start && params.start.trim() !== "") || (params.end && params.end.trim() !== "")) {
-    where.createdAt = {};
-    if (params.start && params.start.trim() !== "") {
-      where.createdAt.gte = new Date(params.start);
-    }
-    if (params.end && params.end.trim() !== "") {
-      where.createdAt.lte = new Date(params.end);
-    }
-  }
-
-  const [logs, users] = await Promise.all([
-    prisma.auditLog.findMany({
-      where,
-      include: { user: { select: { name: true, email: true } } },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-    }),
-    prisma.user.findMany({ where: { organizationId }, select: { name: true } })
-  ]);
-
-  const currentQueryParams = new URLSearchParams(params as any).toString();
+  const currentQueryParams = new URLSearchParams(
+    Object.entries(params).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  ).toString();
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-6">

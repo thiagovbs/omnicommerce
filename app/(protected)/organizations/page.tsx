@@ -1,17 +1,23 @@
-import { prisma } from "@/lib/prisma";
-import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import { Building2 } from "lucide-react";
+import { currentActor } from "@/lib/current-actor";
+import { isOrgAdmin, isPlatformAdmin } from "@/lib/domain/roles";
+import { prisma } from "@/lib/prisma";
+import { DeleteOrganizationButton } from "./delete-organization-button";
 import { OrganizationForm } from "./organization-form";
-import { Building2, Trash2 } from "lucide-react";
-import { deleteOrganization } from "./actions";
+
+export const dynamic = "force-dynamic";
 
 export default async function OrganizationsPage() {
-  const session = await auth();
-  if ((session?.user as any)?.role !== "ADMIN") redirect("/dashboard");
+  const actor = await currentActor();
+  if (!isOrgAdmin(actor.role)) redirect("/dashboard");
+  const platform = isPlatformAdmin(actor.role);
 
+  // Only a platform operator sees other tenants; a tenant administrator sees its own organization.
   const organizations = await prisma.organization.findMany({
+    where: platform ? {} : { id: actor.organizationId },
     orderBy: { name: "asc" },
-    include: { _count: { select: { users: true, sales: true } } }
+    select: { id: true, name: true, _count: { select: { users: true, sales: true, marketplaces: true } } },
   });
 
   return (
@@ -19,9 +25,13 @@ export default async function OrganizationsPage() {
       <div className="flex justify-between items-center mb-8">
         <div>
           <h1 className="text-3xl font-bold">Organizações</h1>
-          <p className="text-gray-500">Gerencie as empresas que utilizam o sistema.</p>
+          <p className="text-gray-500">
+            {platform
+              ? "Gerencie as empresas que utilizam o sistema."
+              : "Dados cadastrais da sua empresa."}
+          </p>
         </div>
-        <OrganizationForm />
+        {platform && <OrganizationForm />}
       </div>
 
       <div className="bg-white border rounded-xl shadow-sm overflow-hidden">
@@ -30,6 +40,7 @@ export default async function OrganizationsPage() {
             <tr>
               <th className="px-6 py-4 text-sm font-semibold">Nome da Empresa</th>
               <th className="px-6 py-4 text-sm font-semibold text-center">Usuários</th>
+              <th className="px-6 py-4 text-sm font-semibold text-center">Marketplaces</th>
               <th className="px-6 py-4 text-sm font-semibold text-center">Vendas</th>
               <th className="px-6 py-4 text-sm font-semibold text-right">Ações</th>
             </tr>
@@ -40,15 +51,20 @@ export default async function OrganizationsPage() {
                 <td className="px-6 py-4 flex items-center gap-3">
                   <Building2 className="text-gray-400" size={20} />
                   <span className="font-medium">{org.name}</span>
+                  {org.id === actor.organizationId && (
+                    <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">Sua empresa</span>
+                  )}
                 </td>
                 <td className="px-6 py-4 text-center text-sm text-gray-500">{org._count.users}</td>
+                <td className="px-6 py-4 text-center text-sm text-gray-500">{org._count.marketplaces}</td>
                 <td className="px-6 py-4 text-center text-sm text-gray-500">{org._count.sales}</td>
                 <td className="px-6 py-4 text-right">
                   <div className="flex justify-end gap-2">
-                    <OrganizationForm defaultValues={org} />
-                    <form action={async () => { "use server"; await deleteOrganization(org.id); }}>
-                      <button className="p-2 text-gray-400 hover:text-red-600"><Trash2 size={18} /></button>
-                    </form>
+                    <OrganizationForm defaultValues={{ id: org.id, name: org.name }} />
+                    {/* Deleting the organization you are signed in with would lock you out. */}
+                    {platform && org.id !== actor.organizationId && (
+                      <DeleteOrganizationButton organizationId={org.id} organizationName={org.name} />
+                    )}
                   </div>
                 </td>
               </tr>

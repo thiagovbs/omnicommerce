@@ -5,7 +5,9 @@ FROM node:20-alpine AS base
 FROM base AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
+# O schema vem antes do install porque o postinstall roda prisma generate.
 COPY package.json package-lock.json ./
+COPY prisma ./prisma
 RUN npm ci
 
 # 3. Builder
