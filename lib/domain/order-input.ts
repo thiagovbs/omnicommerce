@@ -36,7 +36,9 @@ function checkMoneyRange(value: Prisma.Decimal, label: string) {
 
 function dateInput(value: unknown, label: string, timestamp = false) {
   const text = textInput(value, label, 40);
-  if (timestamp && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/.test(text)) {
+  // Fração de segundo com qualquer precisão: o ISO 8601 permite, e provedores
+  // divergem — o Mercado Livre manda milissegundos, o Python manda microssegundos.
+  if (timestamp && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/.test(text)) {
     throw new OrderError(`${label} deve incluir horário e fuso.`);
   }
   if (!timestamp && !/^\d{4}-\d{2}-\d{2}(T.*)?$/.test(text)) throw new OrderError(`${label} inválida.`);

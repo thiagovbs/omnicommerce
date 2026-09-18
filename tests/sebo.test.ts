@@ -14,14 +14,15 @@ const notification = (extra: Record<string, unknown> = {}) => ({
   sent: "2026-09-18T11:30:00.000-03:00", ...extra,
 });
 
-// ESPECIFICAÇÃO do que GET /integration/orders/{id} do sebo deve devolver.
+// Forma colhida de GET /integration/orders/{id} em produção (18/09/2026).
 // Se o backend divergir disto, este teste é o que avisa.
 const order = (extra: Record<string, unknown> = {}) => ({
   id: 4321,
   status: "PAID",
   total: 299.7,
-  created_at: "2026-09-18T10:00:00.000-03:00",
-  updated_at: "2026-09-18T11:30:00.000-03:00",
+  // O Python emite microssegundos; o Mercado Livre, milissegundos.
+  created_at: "2026-09-18T10:00:00.467762+00:00",
+  updated_at: "2026-09-18T11:30:00.467762+00:00",
   customer: { name: "Ana Souza", email: "ana@exemplo.test" },
   items: [{ product_id: 7, name: "Livro usado", unit_price: 99.9, quantity: 3 }],
   ...extra,
@@ -88,8 +89,24 @@ test("adapter do Sebo On-Line sem rede e sem banco", async (t) => {
     assert.equal(parsed.discount.toFixed(2), "0.00");
     assert.equal(parsed.net.toFixed(2), "299.70");
     assert.equal(parsed.customerName, "Ana Souza");
-    assert.equal(parsed.externalUpdatedAt.toISOString(), "2026-09-18T14:30:00.000Z");
+    assert.equal(parsed.externalUpdatedAt.toISOString(), "2026-09-18T11:30:00.467Z");
     assert.deepEqual(parsed.items.map((i) => [i.title, i.externalItemId, i.quantity]), [["Livro usado", "7", 3]]);
+  });
+
+  await t.test("pedido real de produção passa pela validação", () => {
+    // Colhido de GET /sebo/api/integration/orders/1. Microssegundo na data
+    // reprovava antes: o validador aceitava só até milissegundo.
+    const real = {
+      id: 1, status: "PAID", total: 219.0,
+      created_at: "2026-09-17T18:52:49.467762+00:00",
+      updated_at: "2026-09-17T18:52:49.467762+00:00",
+      customer: { name: "Thiago Veloso", email: "thiago.vbs@gmail.com" },
+      items: [{ product_id: 14, name: "Jaqueta Corta-Vento", unit_price: 219.0, quantity: 1 }],
+    };
+    const parsed = parseIntegratedOrder(normalizeSeboOrder(real));
+    assert.equal(parsed.gross.toFixed(2), "219.00");
+    assert.equal(parsed.net.toFixed(2), "219.00");
+    assert.equal(parsed.status, "PAID");
   });
 
   await t.test("normalização: float do sebo é quantizado a duas casas", () => {
