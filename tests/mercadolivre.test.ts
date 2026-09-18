@@ -43,6 +43,12 @@ const context = (conn: unknown) => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 }) as any;
 
+// Banco que estoura se for usado: nestes casos o resolver não deve tocá-lo.
+const semBanco = new Proxy({}, {
+  get() { throw new Error("o resolver não deveria consultar o banco aqui"); },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+}) as any;
+
 test("adapter do Mercado Livre sem rede e sem banco", async (t) => {
   await t.test("aviso: extrai pedido, vendedor e identidade estável", () => {
     const parsed = parseNotification(notification());
@@ -173,13 +179,15 @@ test("adapter do Mercado Livre sem rede e sem banco", async (t) => {
 
   await t.test("resolver: recusa evento sem conexão utilizável antes de qualquer chamada", async () => {
     const reject = async () => { assert.fail("não deveria chamar o provedor"); };
-    const resolve = providerResolver(reject as unknown as typeof fetch);
+    const resolve = providerResolver(semBanco, reject as unknown as typeof fetch);
     await assert.rejects(resolve(context(null)), /sem conexão autorizada/);
     await assert.rejects(resolve(context(connection({ status: "INACTIVE" }))), /Conexão inativa/);
     await assert.rejects(resolve(context(connection({ accessToken: null }))), /sem credencial/);
+    // Com o OAuth, token vencido tenta renovar; sem credencial de renovação,
+    // o pedido é reautorizar em vez de apenas "expirada".
     await assert.rejects(resolve(context(connection({
-      accessToken: "cifrado", expiresAt: new Date(Date.now() - 1000),
-    }))), /expirada/);
+      accessToken: "cifrado", refreshToken: null, expiresAt: new Date(Date.now() - 1000),
+    }))), /renovação/);
     await assert.rejects(resolve(context(connection({
       provider: "SHOPEE", accessToken: "cifrado",
     }))), /Shopee não implementada/);
@@ -189,9 +197,9 @@ test("adapter do Mercado Livre sem rede e sem banco", async (t) => {
     const previous = process.env.INTEGRATION_ENCRYPTION_KEY;
     process.env.INTEGRATION_ENCRYPTION_KEY = randomBytes(32).toString("base64");
     try {
-      const resolve = providerResolver(async () => Response.json(order()));
+      const resolve = providerResolver(semBanco, async () => Response.json(order()));
       const snapshot = await resolve(context(connection({
-        accessToken: encryptSecret("APP_USR-token"), expiresAt: new Date(Date.now() + 60000),
+        accessToken: encryptSecret("APP_USR-token"), expiresAt: new Date(Date.now() + 3600_000),
       })));
       assert.equal(parseIntegratedOrder(snapshot).net.toFixed(2), "302.90");
     } finally {

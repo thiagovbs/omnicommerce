@@ -51,6 +51,12 @@ function comBase<T>(valor: string | undefined, corpo: () => T): T {
   }
 }
 
+// Banco que estoura se for usado: nestes casos o resolver não deve tocá-lo.
+const semBanco = new Proxy({}, {
+  get() { throw new Error("o resolver não deveria consultar o banco aqui"); },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+}) as any;
+
 test("adapter do Sebo On-Line sem rede e sem banco", async (t) => {
   await t.test("aviso: extrai pedido, loja e identidade estável", () => {
     const parsed = parseSeboNotification(notification());
@@ -171,7 +177,7 @@ test("adapter do Sebo On-Line sem rede e sem banco", async (t) => {
     process.env.INTEGRATION_ENCRYPTION_KEY = randomBytes(32).toString("base64");
     process.env.SEBO_API_URL = "https://api-assets.sensedia.com/v1";
     try {
-      const resolve = providerResolver(async () => Response.json(order()));
+      const resolve = providerResolver(semBanco, async () => Response.json(order()));
       const snapshot = await resolve(context(connection({ accessToken: encryptSecret("token-de-servico") })));
       assert.equal(parseIntegratedOrder(snapshot).net.toFixed(2), "299.70");
       // As mesmas guardas do ML valem aqui.
