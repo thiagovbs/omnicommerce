@@ -26,7 +26,8 @@ export async function dispatchOutbox(db: PrismaClient, publish: EventPublisher, 
     }, data: { leaseToken, leaseUntil: new Date(claimTime.getTime() + 60000), attempts: { increment: 1 } } });
     if (!claim.count) continue;
     try {
-      await publish({ eventId: message.eventId, deduplicationId: message.id + ":" + leaseToken });
+      // Separador com underscore: o QStash recusa dois-pontos no id de deduplicação.
+      await publish({ eventId: message.eventId, deduplicationId: message.id + "_" + leaseToken });
       const result = await db.outboxMessage.updateMany({ where: { id: message.id, leaseToken }, data: {
         status: "PUBLISHED", publishedAt: new Date(), leaseUntil: null, leaseToken: null, lastError: null,
       } });

@@ -165,6 +165,9 @@ test("pedidos, status e eventos em PostgreSQL", async (t) => {
       let deliveries = 0;
       await Promise.all([1, 2].map(() => dispatchOutbox(db, async (message) => {
         assert.equal(message.eventId, event.id);
+        // O QStash recusa o id de deduplicação com dois-pontos; o dublê imita a
+        // regra para a publicação real não quebrar sem ninguém notar.
+        assert.match(message.deduplicationId, /^[A-Za-z0-9_.-]{1,128}$/);
         deliveries++;
       })));
       assert.equal(deliveries, 1);

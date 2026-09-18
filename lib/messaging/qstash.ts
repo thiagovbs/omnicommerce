@@ -29,6 +29,11 @@ export function messagingConfig() {
 export function qstashPublisher(fetcher: typeof fetch = fetch): EventPublisher {
   const config = messagingConfig();
   return async ({ eventId, deduplicationId }) => {
+    // Falha no limite, com nome, em vez de levar 400 do QStash e registrar
+    // "publicação falhou" sem dizer por quê.
+    if (!/^[A-Za-z0-9_.-]{1,128}$/.test(deduplicationId)) {
+      throw new Error("QSTASH_INVALID_DEDUPLICATION_ID");
+    }
     const response = await fetcher(`${config.api}/v2/publish/${config.destination}`, {
       method: "POST", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(5000),
       headers: {
