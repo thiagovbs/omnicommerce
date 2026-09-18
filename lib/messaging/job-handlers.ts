@@ -33,6 +33,11 @@ export async function handleDispatchJob(request: Request, dispatch: () => Promis
   }
   try { return Response.json(await dispatch()); }
   catch (error) {
-    return Response.json({ error: "Publicação indisponível." }, { status: error instanceof MessagingConfigurationError ? 503 : 500 });
+    // A rota exige o CRON_SECRET, então pode dizer qual configuração está
+    // errada — nomes de variável, nunca valores.
+    if (error instanceof MessagingConfigurationError) {
+      return Response.json({ error: error.message }, { status: 503 });
+    }
+    return Response.json({ error: "Publicação indisponível." }, { status: 500 });
   }
 }

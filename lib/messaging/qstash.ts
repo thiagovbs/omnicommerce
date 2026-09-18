@@ -6,19 +6,26 @@ export class MessagingConfigurationError extends Error {}
 
 export function messagingConfig() {
   const { APP_URL, QSTASH_TOKEN, QSTASH_CURRENT_SIGNING_KEY, QSTASH_NEXT_SIGNING_KEY } = process.env;
+  // A checagem direta mantém o estreitamento de tipo; o nome da variável que
+  // falta entra na mensagem, porque a genérica obrigava a adivinhar qual das quatro.
   if (!APP_URL || !QSTASH_TOKEN || !QSTASH_CURRENT_SIGNING_KEY || !QSTASH_NEXT_SIGNING_KEY) {
-    throw new MessagingConfigurationError("Mensageria não configurada.");
+    const ausentes = Object.entries({
+      APP_URL, QSTASH_TOKEN, QSTASH_CURRENT_SIGNING_KEY, QSTASH_NEXT_SIGNING_KEY,
+    }).filter(([, valor]) => !valor).map(([nome]) => nome);
+    throw new MessagingConfigurationError(`Mensageria não configurada: ${ausentes.join(", ")}.`);
   }
   let app: URL;
   let api: URL;
   try {
     app = new URL(APP_URL);
     api = new URL(process.env.QSTASH_URL ?? "https://qstash.upstash.io");
-  } catch { throw new MessagingConfigurationError("Configuração de mensageria inválida."); }
-  if (app.protocol !== "https:" || app.username || app.password || app.search || app.hash || app.pathname !== "/" ||
-      api.protocol !== "https:" || !/^qstash(?:-[a-z0-9-]+)?\.upstash\.io$/.test(api.hostname) ||
+  } catch { throw new MessagingConfigurationError("Configuração de mensageria inválida: URL não reconhecida."); }
+  if (app.protocol !== "https:" || app.username || app.password || app.search || app.hash || app.pathname !== "/") {
+    throw new MessagingConfigurationError("Configuração de mensageria inválida: APP_URL.");
+  }
+  if (api.protocol !== "https:" || !/^qstash(?:-[a-z0-9-]+)?\.upstash\.io$/.test(api.hostname) ||
       api.username || api.password || api.port || api.search || api.hash || api.pathname !== "/") {
-    throw new MessagingConfigurationError("Configuração de mensageria inválida.");
+    throw new MessagingConfigurationError("Configuração de mensageria inválida: QSTASH_URL.");
   }
   return {
     destination: new URL("/api/jobs/marketplace-events", app).toString(), api: api.origin,
