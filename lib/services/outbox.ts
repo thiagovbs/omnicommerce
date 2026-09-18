@@ -31,11 +31,15 @@ export async function dispatchOutbox(db: PrismaClient, publish: EventPublisher, 
         status: "PUBLISHED", publishedAt: new Date(), leaseUntil: null, leaseToken: null, lastError: null,
       } });
       published += result.count;
-    } catch {
+    } catch (error) {
+      // Só códigos nossos entram no registro: mensagem de terceiro pode carregar
+      // cabeçalho ou credencial.
+      const motivo = error instanceof Error && /^QSTASH_[A-Z0-9_]+$/.test(error.message)
+        ? error.message : "PUBLISH_FAILED";
       await db.outboxMessage.updateMany({ where: { id: message.id, leaseToken }, data: {
         status: message.attempts + 1 >= 8 ? "FAILED" : "PENDING", leaseUntil: null, leaseToken: null,
         availableAt: new Date(Date.now() + Math.min(3600000, 1000 * 2 ** (message.attempts + 1))),
-        lastError: "PUBLISH_FAILED",
+        lastError: motivo,
       } });
       failed++;
     }

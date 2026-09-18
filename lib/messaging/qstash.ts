@@ -36,7 +36,10 @@ export function qstashPublisher(fetcher: typeof fetch = fetch): EventPublisher {
         "Upstash-Deduplication-Id": deduplicationId, "Upstash-Retries": "3", "Upstash-Timeout": "30s",
       }, body: JSON.stringify({ eventId }),
     });
-    if (!response.ok) throw new Error("QSTASH_PUBLISH_FAILED");
+    // O status entra na mensagem: é o que distingue destino errado (404),
+    // credencial recusada (401) e cota estourada (429) na hora do diagnóstico.
+    // Nunca o corpo da resposta, que pode ecoar cabeçalho.
+    if (!response.ok) throw new Error(`QSTASH_PUBLISH_FAILED_${response.status}`);
     const result: unknown = await response.json();
     if (!result || typeof result !== "object" || !("messageId" in result) || typeof result.messageId !== "string") {
       throw new Error("QSTASH_INVALID_RESPONSE");
