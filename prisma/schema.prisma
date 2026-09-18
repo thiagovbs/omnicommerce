@@ -3,8 +3,11 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL") // Agora isso voltará a funcionar
+  provider  = "postgresql"
+  // Conexão pooled: é a que a aplicação usa (no Neon, o host com -pooler).
+  url       = env("DATABASE_URL")
+  // Conexão direta: migrations não funcionam através de pooler em modo transaction.
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 enum UserRole {

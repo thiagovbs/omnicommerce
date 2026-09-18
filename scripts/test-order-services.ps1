@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $containerId = $null
 $previousUrl = $env:DATABASE_URL
+$previousDirectUrl = $env:DIRECT_DATABASE_URL
 $previousOptions = $env:TS_NODE_COMPILER_OPTIONS
 $testPassword = [guid]::NewGuid().ToString('N')
 Push-Location $projectRoot
@@ -20,6 +21,8 @@ try {
     if ($LASTEXITCODE -ne 0 -or $mapping -notmatch '^127\.0\.0\.1:(\d+)$') { throw 'Unexpected test port mapping' }
     $testPort = $Matches[1]
     $env:DATABASE_URL = "postgresql://postgres:${testPassword}@127.0.0.1:${testPort}/postgres?schema=public"
+    # Sem pooler no contêiner de teste: a conexão direta é a mesma.
+    $env:DIRECT_DATABASE_URL = $env:DATABASE_URL
     & ./node_modules/.bin/prisma.cmd migrate deploy
     if ($LASTEXITCODE -ne 0) { throw 'Migration failed' }
     & ./node_modules/.bin/prisma.cmd migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code
@@ -29,6 +32,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Order service tests failed' }
 } finally {
     $env:DATABASE_URL = $previousUrl
+    $env:DIRECT_DATABASE_URL = $previousDirectUrl
     $env:TS_NODE_COMPILER_OPTIONS = $previousOptions
     if ($containerId) { docker stop $containerId | Out-Null }
     Pop-Location
