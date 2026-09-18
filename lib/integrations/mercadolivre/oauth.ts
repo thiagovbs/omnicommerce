@@ -49,6 +49,11 @@ export function oauthConfig() {
   };
 }
 
+// Para a tela decidir se oferece o botão: sem isto, o clique cairia num 500.
+export function oauthConfigured() {
+  try { oauthConfig(); return true; } catch { return false; }
+}
+
 export function authorizationUrl(state: string) {
   const config = oauthConfig();
   const url = new URL(config.authBase);
