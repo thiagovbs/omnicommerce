@@ -4,7 +4,7 @@ import { PrismaClient } from "@prisma/client";
 import { OrderError } from "../lib/domain/order-input";
 import { fetchMercadoLivreCategories } from "../lib/integrations/mercadolivre/categories";
 import {
-  listCategoryChildren, listCategoryTrees, searchCategories, setListingCategory,
+  canalTemArvore, listCategoryChildren, listCategoryTrees, searchCategories, setListingCategory,
   syncCategoriesIfStale, syncMarketplaceCategories, VALIDADE_MS,
 } from "../lib/services/categories";
 import { createProduct } from "../lib/services/products";
@@ -103,6 +103,18 @@ test("árvore de categorias do Mercado Livre sem rede", async (t) => {
       (e: Error) => e.message === "ML_UNAVAILABLE");
     await assert.rejects(fetchMercadoLivreCategories("t", "MLB", fetcherDe({})), OrderError);
     await assert.rejects(fetchMercadoLivreCategories("t", "mlb", fetcherDe(ARVORE)), OrderError);
+  });
+});
+
+test("quem tem árvore de categorias", async (t) => {
+  await t.test("ter integração não é ter árvore", () => {
+    assert.equal(canalTemArvore("mercado_livre"), true);
+    assert.equal(canalTemArvore("mercadolivre"), true);
+    // Integração completa, nenhuma árvore: a categoria é o texto do produto.
+    assert.equal(canalTemArvore("sebo"), false);
+    assert.equal(canalTemArvore("sebo_online"), false);
+    assert.equal(canalTemArvore("shopee"), false);
+    assert.equal(canalTemArvore("feira-livre"), false);
   });
 });
 
@@ -243,7 +255,11 @@ test("categorias por canal em PostgreSQL", async (t) => {
       assert.equal(ml.temArvore, true);
       assert.equal(ml.total, 6);
       assert.equal(sebo.temArvore, false);
-      assert.equal(sebo.temProvedor, true, "o sebo tem provedor, só não tem árvore");
+      // O sebo tem integração completa e nenhuma árvore: a categoria dele é o
+      // texto livre do produto. Confundir as duas coisas faz a tela oferecer
+      // uma importação que nunca acontece.
+      assert.equal(sebo.suportaArvore, false);
+      assert.equal(ml.suportaArvore, true);
     });
 
     await t.test("catálogo de outra organização não alcança a árvore", async () => {

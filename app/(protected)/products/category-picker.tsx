@@ -21,7 +21,9 @@ interface Canal {
   temArvore: boolean;
   total: number;
   syncedAt: string | null;
-  temProvedor: boolean;
+  /// O provedor tem árvore a importar. Falso no Sebo On-Line, que usa a
+  /// categoria em texto do produto.
+  suportaArvore: boolean;
 }
 
 /**
@@ -52,9 +54,12 @@ export function CategoryPicker({ produto }: { produto: ProductRow }) {
   useEffect(() => {
     void (async () => {
       const lista = await canaisComCategoria();
-      const primeiro = lista.find((c) => c.temArvore);
+      // Prefere um canal com árvore, mas cai no primeiro: um canal de
+      // categoria em texto também tem o que explicar, e deixar o seletor
+      // vazio esconderia isso.
+      const primeiro = lista.find((c) => c.temArvore) ?? lista[0];
       // As raízes vêm junto, para a tela não aparecer vazia por um instante.
-      const raizes = primeiro ? await filhosDaCategoria(primeiro.id, null) : null;
+      const raizes = primeiro?.temArvore ? await filhosDaCategoria(primeiro.id, null) : null;
       setCanais(lista);
       if (primeiro) setCanal(primeiro.id);
       if (raizes?.ok) setNivel(raizes.itens);
@@ -132,15 +137,15 @@ export function CategoryPicker({ produto }: { produto: ProductRow }) {
           >
             <option value="">Selecione…</option>
             {canais.map((c) => (
-              <option key={c.id} value={c.id} disabled={!c.temArvore}>
+              <option key={c.id} value={c.id}>
                 {c.name}
-                {!c.temProvedor ? " — sem árvore de categorias"
+                {!c.suportaArvore ? " — categoria em texto"
                   : !c.temArvore ? " — árvore não importada" : ` — ${c.total.toLocaleString("pt-BR")} categorias`}
               </option>
             ))}
           </select>
           <button
-            type="button" disabled={importando}
+            type="button" disabled={importando || (!!canalAtual && !canalAtual.suportaArvore)}
             onClick={async () => {
               setImportando(true);
               const resultado = await importarCategorias();
@@ -164,7 +169,7 @@ export function CategoryPicker({ produto }: { produto: ProductRow }) {
         )}
       </div>
 
-      {canal && canalAtual?.temArvore && (
+      {canal && canalAtual?.suportaArvore && canalAtual.temArvore && (
         <>
           {escolhida && (
             <div className="flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
@@ -272,11 +277,29 @@ export function CategoryPicker({ produto }: { produto: ProductRow }) {
         </>
       )}
 
-      {canal && canalAtual && !canalAtual.temArvore && (
+      {canal && canalAtual && !canalAtual.suportaArvore && (
+        <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-4 text-sm">
+          <p className="text-gray-700">
+            <span className="font-medium">{canalAtual.name}</span> não tem árvore de categorias:
+            ele usa a categoria em <span className="font-medium">texto livre</span> do produto,
+            a mesma para todos os canais assim.
+          </p>
+          <p className="text-gray-600">
+            Categoria atual do produto:{" "}
+            {produto.category
+              ? <span className="rounded bg-white border border-gray-300 px-1.5 py-0.5 font-mono text-xs">{produto.category}</span>
+              : <span className="text-gray-400">não informada</span>}
+          </p>
+          <p className="text-xs text-gray-500">
+            Para alterá-la, use o campo Categoria na aba Dados. Não há o que importar aqui.
+          </p>
+        </div>
+      )}
+
+      {canal && canalAtual?.suportaArvore && !canalAtual.temArvore && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          {canalAtual.temProvedor
-            ? "A árvore deste canal ainda não foi importada. Ela é baixada sozinha depois da autorização; use Importar para refazer agora."
-            : "Este canal não tem árvore de categorias no provedor."}
+          A árvore deste canal ainda não foi importada. Ela é baixada sozinha depois da
+          autorização; use Importar para refazer agora.
         </div>
       )}
     </div>

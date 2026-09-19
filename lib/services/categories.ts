@@ -41,6 +41,21 @@ export function categoryFetcherFor(provider: string, fetcher: typeof fetch = fet
 }
 
 /**
+ * Se o canal tem árvore de categorias a importar.
+ *
+ * Não é o mesmo que "tem integração": o Sebo On-Line tem integração completa e
+ * nenhuma árvore — a categoria dele é o texto livre do produto. Confundir as
+ * duas coisas faz a tela oferecer uma importação que nunca vai acontecer.
+ *
+ * Derivado do próprio despachante, para não haver duas listas de provedores
+ * que possam discordar.
+ */
+export function canalTemArvore(code: string) {
+  const provider = providerDoCanal(code);
+  return provider !== null && categoryFetcherFor(provider) !== null;
+}
+
+/**
  * Importa a árvore de um canal.
  *
  * A troca é feita em transação: apaga o que havia e grava o novo. Sem isso,
@@ -136,9 +151,10 @@ export async function listCategoryTrees(db: PrismaClient, actor: UserActor) {
       temArvore: (contagem?._count._all ?? 0) > 0,
       total: contagem?._count._all ?? 0,
       syncedAt: contagem?._max.syncedAt?.toISOString() ?? null,
-      // Canal sem provedor conhecido nunca terá árvore; a tela diz isso em vez
-      // de mostrar um seletor vazio.
-      temProvedor: providerDoCanal(canal.code) !== null,
+      // Provedor sem árvore usa a categoria em texto do produto. A tela precisa
+      // separar isso de "árvore ainda não importada", que se resolve
+      // importando — esta não se resolve nunca.
+      suportaArvore: canalTemArvore(canal.code),
     };
   });
 }
