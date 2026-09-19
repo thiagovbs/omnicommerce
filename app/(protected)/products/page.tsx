@@ -32,6 +32,7 @@ export default async function ProductsPage() {
     listings: p.listings.map((l) => ({
       id: l.id, status: l.status, needsSync: l.needsSync,
       externalListingId: l.externalListingId,
+      categoryExternalId: l.categoryExternalId,
       publishedPrice: l.publishedPrice ? l.publishedPrice.toFixed(2) : null,
       publishedStock: l.publishedStock,
       lastPublishedAt: l.lastPublishedAt ? l.lastPublishedAt.toISOString() : null,

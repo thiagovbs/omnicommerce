@@ -95,8 +95,13 @@ export async function requestPublication(
         create: { productId: id, marketplaceId: marketplace.id, status: "PUBLISHING", needsSync: true },
         select: { id: true, status: true },
       });
-      // Um anúncio que tinha desistido volta à fila por pedido explícito.
-      if (listing.status === "FAILED" || listing.status === "PAUSED" || listing.status === "CLOSED") {
+      // Qualquer estado que não seja PUBLISHED volta para PUBLISHING: a
+      // publicação foi pedida explicitamente. Cobre o rascunho criado ao
+      // escolher a categoria, que de outro modo ficaria fora da varredura do
+      // trabalhador -- ela só olha PUBLISHING e PUBLISHED -- e o pedido não
+      // faria nada, sem erro nenhum. PUBLISHED continua publicado enquanto
+      // ressincroniza, para a tela não dizer que o anúncio saiu do ar.
+      if (listing.status !== "PUBLISHED") {
         await tx.listing.update({ where: { id: listing.id }, data: { status: "PUBLISHING" } });
       }
       pedidos.push({ canal: marketplace.name, listingId: listing.id });
@@ -144,7 +149,9 @@ export function estaEmDia(listing: ListingWithProduct) {
  * que o outbox de entrada: duas rodadas simultâneas não publicam o mesmo
  * anúncio duas vezes.
  */
-export async function syncListings(db: PrismaClient, publish: ListingPublisher, limit = 10) {
+export async function syncListings(
+  db: PrismaClient, publish: ListingPublisher, limit = 10, organizationId?: string,
+) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
     throw new OrderError("Limite de sincronização inválido.");
   }
@@ -155,6 +162,11 @@ export async function syncListings(db: PrismaClient, publish: ListingPublisher, 
       status: { in: ["PUBLISHING", "PUBLISHED"] },
       availableAt: { lte: agora },
       OR: [{ leaseUntil: null }, { leaseUntil: { lte: agora } }],
+      // Sem organização é a rodada do agendador, que atende todo mundo. Com
+      // organização é alguém apertando o botão, e aí a rodada precisa ser só
+      // da organização dele -- senão o lote de um tenant é gasto publicando
+      // anúncios de outro.
+      ...(organizationId ? { product: { organizationId } } : {}),
     },
     include: { product: { include: { images: { orderBy: { position: "asc" } } } } },
     orderBy: { availableAt: "asc" },

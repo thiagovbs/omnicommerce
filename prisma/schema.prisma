@@ -138,6 +138,7 @@ model Marketplace {
   integrationEvents IntegrationEvent[]
   connections       MarketplaceConnection[]
   listings          Listing[]
+  categories        MarketplaceCategory[]
 
   @@unique([organizationId, code])
   @@index([organizationId])
@@ -382,6 +383,14 @@ model Listing {
   /// trabalhador o considerava em dia -- preço e estoque não tinham mudado --
   /// e as imagens novas nunca chegavam ao provedor.
   publishedImagesHash String?
+  /// Categoria escolhida neste canal, no identificador do provedor.
+  ///
+  /// Mora no anúncio porque é por canal: o mesmo produto pode ser "Livros" no
+  /// Mercado Livre e outra coisa noutro marketplace. O campo livre `category`
+  /// do produto continua existindo para quem não tem árvore de categorias.
+  categoryExternalId  String?
+  /// A categoria enviada ao provedor na última publicação.
+  publishedCategoryId String?
   lastPublishedAt     DateTime?
   /// Há trabalho a fazer neste anúncio. Ligada quando o produto muda ou quando
   /// se pede publicação; desligada quando o provedor confirma. Sem ela o
@@ -457,4 +466,35 @@ model ProductImage {
   /// ambígua e dependeria da ordem que o banco devolvesse.
   @@unique([productId, position])
   @@index([productId])
+}
+
+/// Árvore de categorias de um canal, copiada do provedor.
+///
+/// Guardada por canal e não por provedor: dois canais podem apontar para sites
+/// diferentes do mesmo provedor (MLB, MLA), e a árvore de um não serve ao
+/// outro. O identificador é o do provedor, não um nosso.
+model MarketplaceCategory {
+  id               String   @id @default(cuid())
+  marketplaceId    String
+  /// Identificador no provedor, como MLB1051.
+  externalId       String
+  name             String
+  /// Nulo na raiz. É o que permite descer um nível de cada vez na tela.
+  parentExternalId String?
+  /// Só folha aceita anúncio; intermediária existe para navegar até ela.
+  leaf             Boolean
+  /// Caminho legível completo, com os nomes separados por " > ". É o que a
+  /// busca por texto varre e o que a tela mostra depois de escolhida.
+  path             String
+  /// Zero na raiz. A árvore do MLB chega a 7 níveis.
+  depth            Int
+  /// O provedor pode fechar uma categoria para novas publicações.
+  listingAllowed   Boolean  @default(true)
+  syncedAt         DateTime
+
+  marketplace Marketplace @relation(fields: [marketplaceId], references: [id], onDelete: Cascade)
+
+  @@unique([marketplaceId, externalId])
+  @@index([marketplaceId, parentExternalId])
+  @@index([marketplaceId, leaf])
 }

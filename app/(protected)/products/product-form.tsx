@@ -2,8 +2,11 @@
 
 import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { ChevronLeft, ChevronRight, ImageOff, Loader2, Pencil, Plus, Upload, X } from "lucide-react";
+import {
+  ChevronLeft, ChevronRight, FolderTree, ImageOff, Loader2, Package, Pencil, Plus, Upload, X,
+} from "lucide-react";
 import { MAX_IMAGENS } from "@/lib/domain/product-input";
+import { CategoryPicker } from "./category-picker";
 import { converterImagem, salvarProduto } from "./actions";
 import type { ProductRow } from "./types";
 
@@ -28,6 +31,7 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
   const [aberto, setAberto] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [aba, setAba] = useState<"dados" | "categoria">("dados");
   const [enviandoImagem, setEnviandoImagem] = useState(false);
   // O álbum fica em estado local, e não no formulário: as imagens têm duas
   // origens (URL digitada e arquivo convertido no servidor) e a ordem é
@@ -134,9 +138,49 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
               <p className="text-sm text-gray-500 mt-1">
                 Preço e estoque daqui são o que vai para os canais publicados.
               </p>
+
+              <nav className="-mb-px mt-4 flex gap-6 border-b border-transparent">
+                {([
+                  { chave: "dados", rotulo: "Dados", icone: Package },
+                  { chave: "categoria", rotulo: "Categoria", icone: FolderTree },
+                ] as const).map(({ chave, rotulo, icone: Icone }) => (
+                  <button
+                    key={chave} type="button" onClick={() => setAba(chave)}
+                    // Categoria é por canal e mora no anúncio, que só existe
+                    // depois de o produto existir.
+                    disabled={chave === "categoria" && !produto}
+                    title={chave === "categoria" && !produto ? "Salve o produto primeiro" : undefined}
+                    className={`inline-flex items-center gap-2 border-b-2 px-1 pb-2 text-sm font-medium transition-colors disabled:opacity-40 ${
+                      aba === chave
+                        ? "border-blue-600 text-blue-700"
+                        : "border-transparent text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    <Icone size={15} />
+                    {rotulo}
+                  </button>
+                ))}
+              </nav>
             </div>
 
-            <form onSubmit={handleSubmit(enviar)} className="p-6 space-y-4">
+            {aba === "categoria" && produto && (
+              <div className="p-6">
+                <CategoryPicker produto={produto} />
+                <div className="flex justify-end pt-4">
+                  <button
+                    type="button" onClick={() => setAberto(false)}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Fechar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <form
+              onSubmit={handleSubmit(enviar)}
+              className={aba === "dados" ? "p-6 space-y-4" : "hidden"}
+            >
               {erro && (
                 <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{erro}</div>
               )}

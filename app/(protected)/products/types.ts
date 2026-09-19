@@ -6,6 +6,8 @@ export interface ListingRow {
   status: "DRAFT" | "PUBLISHING" | "PUBLISHED" | "FAILED" | "PAUSED" | "CLOSED";
   needsSync: boolean;
   externalListingId: string | null;
+  /// Categoria escolhida neste canal, no identificador do provedor.
+  categoryExternalId: string | null;
   publishedPrice: string | null;
   publishedStock: number | null;
   lastPublishedAt: string | null;

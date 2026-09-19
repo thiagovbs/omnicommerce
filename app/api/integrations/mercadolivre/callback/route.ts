@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { currentActor } from "@/lib/current-actor";
@@ -6,10 +7,13 @@ import { isOrgAdmin } from "@/lib/domain/roles";
 import { exchangeCode, oauthConfig } from "@/lib/integrations/mercadolivre/oauth";
 import { lerEstado, STATE_COOKIE } from "@/lib/integrations/oauth-state";
 import { prisma } from "@/lib/prisma";
+import { syncCategoriesIfStale } from "@/lib/services/categories";
 import { saveProviderConnection } from "@/lib/services/connections";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+// Folga para a importação das categorias, que roda depois da resposta: a
+// árvore do MLB são ~29 MB e 12 mil nós.
+export const maxDuration = 90;
 
 export async function GET(request: Request) {
   // O matcher do proxy exclui /api, então estas rotas tratam a sessão por conta
@@ -47,6 +51,16 @@ export async function GET(request: Request) {
       externalAccountId: tokens.externalAccountId,
       // O escopo pedido vem da mesma configuração que montou a autorização.
       tokens: { ...tokens, escopoPedido: oauthConfig().scope || null },
+    });
+
+    // A árvore de categorias é importada DEPOIS da resposta: são alguns
+    // segundos que não têm por que segurar o redirecionamento de quem acabou
+    // de autorizar. A conexão já está gravada, então uma falha aqui não desfaz
+    // nada — e a importação se recupera sozinha, porque é disparada de novo
+    // pelo job e pelo botão da tela enquanto a árvore estiver ausente.
+    const marketplaceId = estado.marketplaceId;
+    after(async () => {
+      await syncCategoriesIfStale(prisma, marketplaceId, "MERCADO_LIVRE", tokens.accessToken);
     });
   } catch (error) {
     // Motivo de domínio vai para a tela; qualquer outro fica genérico, porque

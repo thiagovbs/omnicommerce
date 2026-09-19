@@ -5,6 +5,9 @@ import { prisma } from "@/lib/prisma";
 import { OrderError, textInput } from "@/lib/domain/order-input";
 import { MAX_IMAGE_BYTES, tipoDeImagemAceito } from "@/lib/domain/product-input";
 import { providerPublisher } from "@/lib/integrations/publish";
+import {
+  listCategoryChildren, listCategoryTrees, searchCategories, setListingCategory, syncAllCategories,
+} from "@/lib/services/categories";
 import { requestPublication, syncListings } from "@/lib/services/listings";
 import { createProduct, setProductStock, updateProduct } from "@/lib/services/products";
 
@@ -59,7 +62,8 @@ export async function publicar(productId: string, marketplaceIds: string[]) {
     const pedidos = await requestPublication(prisma, actor, productId, marketplaceIds);
     let sincronizados = 0;
     try {
-      const resultado = await syncListings(prisma, providerPublisher(prisma), pedidos.length);
+      const resultado = await syncListings(
+        prisma, providerPublisher(prisma), pedidos.length, actor.organizationId);
       sincronizados = resultado.publicados + resultado.atualizados;
     } catch {
       // Fica para o agendador; o estado no banco é o que manda.
@@ -74,9 +78,10 @@ export async function publicar(productId: string, marketplaceIds: string[]) {
 /// Reenvia o que estiver pendente, na mão. Serve para destravar sem esperar o
 /// agendador depois de corrigir a causa de uma falha.
 export async function sincronizarAgora() {
-  await currentActor();
+  const actor = await currentActor();
   try {
-    const resultado = await syncListings(prisma, providerPublisher(prisma));
+    const resultado = await syncListings(
+      prisma, providerPublisher(prisma), 10, actor.organizationId);
     revalidatePath("/products");
     return { ok: true as const, ...resultado };
   } catch (erro) {
@@ -139,4 +144,59 @@ export async function converterImagem(formData: FormData) {
     dataUri: `data:${arquivo.type};base64,${base64}`,
     bytes: arquivo.size,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Categorias
+// ---------------------------------------------------------------------------
+
+/// Canais com árvore importada, para a aba de categoria saber o que oferecer.
+export async function canaisComCategoria() {
+  const actor = await currentActor();
+  return listCategoryTrees(prisma, actor);
+}
+
+/// Um nível da árvore. `parent` nulo devolve as raízes.
+export async function filhosDaCategoria(marketplaceId: string, parentExternalId: string | null) {
+  const actor = await currentActor();
+  try {
+    return { ok: true as const, itens: await listCategoryChildren(prisma, actor, marketplaceId, parentExternalId) };
+  } catch (erro) {
+    return { ok: false as const, erro: mensagem(erro) };
+  }
+}
+
+/// Busca por texto: com 12 mil categorias, descer sete níveis na mão é pior
+/// que digitar duas palavras.
+export async function buscarCategorias(marketplaceId: string, termo: string) {
+  const actor = await currentActor();
+  try {
+    return { ok: true as const, itens: await searchCategories(prisma, actor, marketplaceId, termo) };
+  } catch (erro) {
+    return { ok: false as const, erro: mensagem(erro) };
+  }
+}
+
+export async function definirCategoria(
+  productId: string, marketplaceId: string, categoryExternalId: string | null,
+) {
+  const actor = await currentActor();
+  try {
+    const resultado = await setListingCategory(prisma, actor, productId, marketplaceId, categoryExternalId);
+    revalidatePath("/products");
+    return { ok: true as const, ...resultado };
+  } catch (erro) {
+    return { ok: false as const, erro: mensagem(erro) };
+  }
+}
+
+/// Reimporta as árvores na mão, para quando a importação que roda depois da
+/// autorização não tiver completado.
+export async function importarCategorias() {
+  await currentActor();
+  try {
+    return { ok: true as const, ...(await syncAllCategories(prisma)) };
+  } catch (erro) {
+    return { ok: false as const, erro: mensagem(erro) };
+  }
 }

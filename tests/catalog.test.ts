@@ -140,7 +140,7 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
         assert.equal(listing.product.sku, "CAT-001");
         return { externalListingId: "sebo-77", price: "49.90", stock: listing.product.stock };
       };
-      const resultado = await syncListings(db, publicador);
+      const resultado = await syncListings(db, publicador, 10, org.id);
       assert.equal(resultado.publicados, 1);
       assert.equal(resultado.falhas, 0);
 
@@ -156,7 +156,7 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
     await t.test("rodar de novo sem mudança não chama o provedor", async () => {
       let chamou = false;
       const publicador: ListingPublisher = async () => { chamou = true; throw new Error("não deveria"); };
-      const resultado = await syncListings(db, publicador);
+      const resultado = await syncListings(db, publicador, 10, org.id);
       assert.equal(chamou, false);
       assert.equal(resultado.publicados, 0);
       assert.equal(resultado.atualizados, 0);
@@ -172,7 +172,7 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
       await syncListings(db, async (listing) => {
         enviado = listing.product.price.toFixed(2);
         return { externalListingId: "sebo-77", price: enviado, stock: listing.product.stock };
-      });
+      }, 10, org.id);
       assert.equal(enviado, "59.90");
       const listing = await db.listing.findFirstOrThrow({ where: { productId: produtoId } });
       assert.equal(listing.publishedPrice?.toFixed(2), "59.90");
@@ -195,7 +195,7 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
       await syncListings(db, async (listing) => {
         chamadas++;
         return { externalListingId: "sebo-77", price: listing.product.price.toFixed(2), stock: listing.product.stock };
-      });
+      }, 10, org.id);
       assert.equal(chamadas, 1, "estado desejado colapsa as mudanças");
       const listing = await db.listing.findFirstOrThrow({ where: { productId: produtoId } });
       assert.equal(listing.publishedPrice?.toFixed(2), "63.00");
@@ -203,7 +203,7 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
 
     await t.test("falha transitória volta para a fila com backoff", async () => {
       await setProductStock(db, ator, produtoId, 4);
-      const resultado = await syncListings(db, async () => { throw new Error("rede caiu"); });
+      const resultado = await syncListings(db, async () => { throw new Error("rede caiu"); }, 10, org.id);
       assert.equal(resultado.falhas, 1);
 
       const listing = await db.listing.findFirstOrThrow({ where: { productId: produtoId } });
@@ -220,7 +220,7 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
       });
       const resultado = await syncListings(db, async () => {
         throw new OrderError("O canal não está conectado. Autorize a conexão.");
-      });
+      }, 10, org.id);
       assert.equal(resultado.falhas, 1);
       const listing = await db.listing.findFirstOrThrow({ where: { productId: produtoId } });
       assert.equal(listing.status, "FAILED");
@@ -237,7 +237,7 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
 
       await syncListings(db, async (l) => ({
         externalListingId: "sebo-77", price: l.product.price.toFixed(2), stock: l.product.stock,
-      }));
+      }), 10, org.id);
       assert.equal(
         (await db.listing.findFirstOrThrow({ where: { productId: produtoId } })).status, "PUBLISHED");
     });
@@ -247,7 +247,7 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
       await requestPublication(db, ator, outro.id, [canal.id]);
       for (let i = 0; i < MAX_SYNC_ATTEMPTS; i++) {
         await db.listing.updateMany({ where: { productId: outro.id }, data: { availableAt: new Date() } });
-        await syncListings(db, async () => { throw new Error("sempre falha"); });
+        await syncListings(db, async () => { throw new Error("sempre falha"); }, 10, org.id);
       }
       const listing = await db.listing.findFirstOrThrow({ where: { productId: outro.id } });
       assert.equal(listing.status, "FAILED");
@@ -677,7 +677,7 @@ test("álbum de imagens em PostgreSQL", async (t) => {
       await requestPublication(db3, ator, criado.id, [canal.id]);
       await syncListings(db3, async (l) => ({
         externalListingId: "sebo-album", price: l.product.price.toFixed(2), stock: l.product.stock,
-      }));
+      }), 10, org.id);
       assert.equal(
         (await db3.listing.findFirstOrThrow({ where: { productId: criado.id } })).needsSync, false);
 
@@ -699,7 +699,7 @@ test("álbum de imagens em PostgreSQL", async (t) => {
         principal = l.product.images[0]?.url ?? "";
         assert.equal(l.product.images.length, 2, "o adapter recebe o álbum inteiro");
         return { externalListingId: "sebo-album", price: l.product.price.toFixed(2), stock: l.product.stock };
-      });
+      }, 10, org.id);
       assert.equal(principal, B);
     });
 
