@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { OrderError } from "../lib/domain/order-input";
-import { parseProduct } from "../lib/domain/product-input";
+import { MAX_IMAGE_BYTES, MAX_IMAGENS, parseProduct, tipoDeImagemAceito } from "../lib/domain/product-input";
 import {
   createProduct, listProducts, setProductStock, updateProduct,
 } from "../lib/services/products";
@@ -11,6 +11,7 @@ import {
 } from "../lib/services/listings";
 import { applyIntegratedOrder } from "../lib/services/sales";
 import { parseIntegratedOrder } from "../lib/domain/order-input";
+import { seboProductPayload } from "../lib/integrations/sebo/catalog";
 import { serializable } from "../lib/services/transactions";
 import { getProductStats } from "../app/(protected)/dashboard/product-stats";
 
@@ -19,7 +20,7 @@ const db = new PrismaClient();
 const produtoBase = {
   sku: "cat-001", title: "Caneca de teste", description: "Uma caneca",
   category: "Casa", brand: "Generico", condition: "novo",
-  imageUrl: "https://exemplo.invalid/caneca.png",
+  images: ["https://exemplo.invalid/caneca.png"],
   price: "49.90", stock: 10,
 };
 
@@ -50,9 +51,9 @@ test("validação do produto sem banco", async (t) => {
   });
 
   await t.test("imagem precisa ser https, porque o provedor busca pelo servidor dele", () => {
-    assert.equal(parseProduct({ ...produtoBase, imageUrl: "" }).imageUrl, "");
-    assert.throws(() => parseProduct({ ...produtoBase, imageUrl: "http://x.invalid/a.png" }), OrderError);
-    assert.throws(() => parseProduct({ ...produtoBase, imageUrl: "nao-e-url" }), OrderError);
+    assert.deepEqual(parseProduct({ ...produtoBase, images: [] }).images, []);
+    assert.throws(() => parseProduct({ ...produtoBase, images: ["http://x.invalid/a.png"] }), OrderError);
+    assert.throws(() => parseProduct({ ...produtoBase, images: ["nao-e-url"] }), OrderError);
   });
 });
 
@@ -256,7 +257,8 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
 
     await t.test("estaEmDia compara preço por valor, não por texto", async () => {
       const listing = await db.listing.findFirstOrThrow({
-        where: { productId: produtoId }, include: { product: true },
+        where: { productId: produtoId },
+        include: { product: { include: { images: { orderBy: { position: "asc" } } } } },
       });
       assert.equal(estaEmDia(listing), true);
       assert.equal(estaEmDia({ ...listing, publishedStock: listing.publishedStock! + 1 }), false);
@@ -515,4 +517,227 @@ test("movimentos de estoque e números do painel em PostgreSQL", async (t) => {
       assert.equal(stats.maisVendidos.length, 0);
     });
   } finally { await db2.$disconnect(); }
+});
+
+test("imagem do produto: URL ou arquivo enviado", async (t) => {
+  // PNG 1x1 real, para o base64 ser válido de verdade e não texto inventado.
+  const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const dataUri = (tipo: string, corpo = PNG_1X1) => `data:${tipo};base64,${corpo}`;
+
+  await t.test("URL https continua aceita e http continua recusado", () => {
+    assert.deepEqual(
+      parseProduct({ ...produtoBase, images: ["https://exemplo.invalid/a.png"] }).images,
+      ["https://exemplo.invalid/a.png"]);
+    assert.throws(() => parseProduct({ ...produtoBase, images: ["http://exemplo.invalid/a.png"] }), OrderError);
+  });
+
+  await t.test("arquivo enviado é guardado como data URI", () => {
+    const valor = dataUri("image/png");
+    assert.deepEqual(parseProduct({ ...produtoBase, images: [valor] }).images, [valor]);
+    for (const tipo of ["image/jpeg", "image/webp", "image/gif", "image/avif"]) {
+      assert.deepEqual(parseProduct({ ...produtoBase, images: [dataUri(tipo)] }).images, [dataUri(tipo)]);
+    }
+  });
+
+  await t.test("tipo fora da lista é recusado, mesmo com base64 válido", () => {
+    // SVG é documento, não imagem; HTML disfarçado de data URI, menos ainda.
+    for (const tipo of ["image/svg+xml", "text/html", "application/pdf"]) {
+      assert.throws(
+        () => parseProduct({ ...produtoBase, images: [dataUri(tipo)] }),
+        (erro: Error) => erro instanceof OrderError && /não aceito|inválid/i.test(erro.message),
+        `deveria recusar ${tipo}`);
+    }
+  });
+
+  await t.test("data URI malformado é recusado antes de chegar ao banco", () => {
+    for (const valor of [
+      "data:image/png;base64,",                 // sem corpo
+      "data:image/png,iVBORw0KGgo=",            // sem base64
+      "data:image/png;base64,não-é-base64!!",   // caractere fora do alfabeto
+      "data:image/png;base64,iVBORw0KGgo",      // truncado: não é múltiplo de 4
+    ]) {
+      assert.throws(() => parseProduct({ ...produtoBase, images: [valor] }), OrderError, `deveria recusar ${valor}`);
+    }
+  });
+
+  await t.test("imagem acima do limite é recusada", () => {
+    // Um pouco além do teto: 3 MB de arquivo viram ~4 MB de base64.
+    const gigante = "A".repeat(Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 200);
+    assert.throws(
+      () => parseProduct({ ...produtoBase, images: [dataUri("image/png", gigante)] }),
+      (erro: Error) => erro instanceof OrderError && /limite/.test(erro.message));
+  });
+
+  await t.test("álbum vazio continua opcional", () => {
+    assert.deepEqual(parseProduct({ ...produtoBase, images: [] }).images, []);
+    assert.deepEqual(parseProduct({ ...produtoBase, images: undefined }).images, []);
+  });
+
+  await t.test("o limite de 500 caracteres da URL não alcança o data URI", () => {
+    // Regressão: a regra antiga cortava em 500 e recusaria toda imagem enviada.
+    const longo = dataUri("image/png", "QUJD".repeat(300));
+    assert(longo.length > 500);
+    assert.deepEqual(parseProduct({ ...produtoBase, images: [longo] }).images, [longo]);
+  });
+
+  await t.test("tipoDeImagemAceito não depende de caixa nem de espaço", () => {
+    assert.equal(tipoDeImagemAceito(" IMAGE/PNG "), true);
+    assert.equal(tipoDeImagemAceito("image/svg+xml"), false);
+  });
+});
+
+test("álbum de imagens: validação sem banco", async (t) => {
+  const A = "https://exemplo.invalid/a.png";
+  const B = "https://exemplo.invalid/b.png";
+  const C = "https://exemplo.invalid/c.png";
+
+  await t.test("a ordem enviada é a ordem guardada", () => {
+    assert.deepEqual(parseProduct({ ...produtoBase, images: [C, A, B] }).images, [C, A, B]);
+  });
+
+  await t.test("repetida é descartada, não recusada", () => {
+    // Mandar a mesma foto duas vezes é engano de quem cadastra, e travar o
+    // salvamento por isso seria pior que ignorar a segunda.
+    assert.deepEqual(parseProduct({ ...produtoBase, images: [A, B, A] }).images, [A, B]);
+  });
+
+  await t.test("entrada vazia no meio não abre buraco nas posições", () => {
+    assert.deepEqual(parseProduct({ ...produtoBase, images: [A, "", B] }).images, [A, B]);
+  });
+
+  await t.test("uma imagem inválida recusa o álbum inteiro", () => {
+    // Salvar as válidas e descartar a ruim esconderia o erro de quem cadastrou.
+    assert.throws(() => parseProduct({ ...produtoBase, images: [A, "http://x.invalid/b.png"] }), OrderError);
+  });
+
+  await t.test("o teto do álbum é respeitado", () => {
+    const muitas = Array.from({ length: MAX_IMAGENS }, (_, i) => `https://exemplo.invalid/${i}.png`);
+    assert.equal(parseProduct({ ...produtoBase, images: muitas }).images.length, MAX_IMAGENS);
+    assert.throws(
+      () => parseProduct({ ...produtoBase, images: [...muitas, "https://exemplo.invalid/extra.png"] }),
+      (erro: Error) => erro instanceof OrderError && /máximo/.test(erro.message));
+  });
+
+  await t.test("o que não é lista é recusado", () => {
+    assert.throws(() => parseProduct({ ...produtoBase, images: A }), OrderError);
+    assert.throws(() => parseProduct({ ...produtoBase, images: { 0: A } }), OrderError);
+  });
+
+  await t.test("o payload do sebo leva só a principal", () => {
+    const payload = seboProductPayload({
+      sku: "X", title: "T", description: "", category: "", brand: "", condition: "",
+      price: new Prisma.Decimal("10.00"), stock: 1, active: true,
+      images: [{ url: A }, { url: B }],
+    } as never);
+    assert.equal(payload.image_url, A);
+  });
+
+  await t.test("álbum vazio manda imagem vazia, não indefinida", () => {
+    // O contrato do sebo tem image_url como string; undefined viraria ausência
+    // do campo e o outro lado decidiria sozinho o que fazer.
+    const payload = seboProductPayload({
+      sku: "X", title: "T", description: "", category: "", brand: "", condition: "",
+      price: new Prisma.Decimal("10.00"), stock: 1, active: true, images: [],
+    } as never);
+    assert.equal(payload.image_url, "");
+  });
+});
+
+test("álbum de imagens em PostgreSQL", async (t) => {
+  const db3 = new PrismaClient();
+  const A = "https://exemplo.invalid/a.png";
+  const B = "https://exemplo.invalid/b.png";
+  const C = "https://exemplo.invalid/c.png";
+  try {
+    const org = await db3.organization.create({ data: { name: "Álbum" } });
+    const admin = await db3.user.create({ data: {
+      organizationId: org.id, email: `admin-album-${Date.now()}@local.test`,
+      name: "Admin", passwordHash: "x", role: "ADMIN",
+    } });
+    const ator = { userId: admin.id, organizationId: org.id };
+    const canal = await db3.marketplace.create({
+      data: { organizationId: org.id, code: "sebo", name: "Sebo do álbum" },
+    });
+    await db3.marketplaceConnection.create({ data: {
+      marketplaceId: canal.id, provider: "SEBO_ONLINE",
+      externalAccountId: `loja-album-${Date.now()}`, accessToken: "cifrado",
+    } });
+
+    const base = { sku: "ALBUM-001", title: "Produto com álbum", price: "10.00", stock: 5 };
+    const criado = await createProduct(db3, ator, { ...base, images: [A, B] });
+
+    await t.test("as imagens nascem numeradas a partir de zero", async () => {
+      const imagens = await db3.productImage.findMany({
+        where: { productId: criado.id }, orderBy: { position: "asc" },
+      });
+      assert.deepEqual(imagens.map((i) => [i.position, i.url]), [[0, A], [1, B]]);
+    });
+
+    await t.test("reordenar troca a principal e marca o anúncio", async () => {
+      await requestPublication(db3, ator, criado.id, [canal.id]);
+      await syncListings(db3, async (l) => ({
+        externalListingId: "sebo-album", price: l.product.price.toFixed(2), stock: l.product.stock,
+      }));
+      assert.equal(
+        (await db3.listing.findFirstOrThrow({ where: { productId: criado.id } })).needsSync, false);
+
+      await updateProduct(db3, ator, criado.id, { ...base, images: [B, A] });
+
+      const imagens = await db3.productImage.findMany({
+        where: { productId: criado.id }, orderBy: { position: "asc" },
+      });
+      assert.deepEqual(imagens.map((i) => i.url), [B, A]);
+      // Mesmo conjunto, ordem diferente: o provedor recebe outra principal.
+      assert.equal(
+        (await db3.listing.findFirstOrThrow({ where: { productId: criado.id } })).needsSync, true,
+        "trocar a principal precisa ressincronizar");
+    });
+
+    await t.test("o trabalhador entrega a principal ao adapter", async () => {
+      let principal = "";
+      await syncListings(db3, async (l) => {
+        principal = l.product.images[0]?.url ?? "";
+        assert.equal(l.product.images.length, 2, "o adapter recebe o álbum inteiro");
+        return { externalListingId: "sebo-album", price: l.product.price.toFixed(2), stock: l.product.stock };
+      });
+      assert.equal(principal, B);
+    });
+
+    await t.test("salvar sem mexer no álbum não ressincroniza", async () => {
+      await updateProduct(db3, ator, criado.id, { ...base, images: [B, A] });
+      assert.equal(
+        (await db3.listing.findFirstOrThrow({ where: { productId: criado.id } })).needsSync, false);
+    });
+
+    await t.test("acrescentar imagem preserva a principal e marca pendência", async () => {
+      await updateProduct(db3, ator, criado.id, { ...base, images: [B, A, C] });
+      const imagens = await db3.productImage.findMany({
+        where: { productId: criado.id }, orderBy: { position: "asc" },
+      });
+      assert.deepEqual(imagens.map((i) => i.url), [B, A, C]);
+      assert.equal(
+        (await db3.listing.findFirstOrThrow({ where: { productId: criado.id } })).needsSync, true);
+    });
+
+    await t.test("esvaziar o álbum apaga as linhas", async () => {
+      await updateProduct(db3, ator, criado.id, { ...base, images: [] });
+      assert.equal(await db3.productImage.count({ where: { productId: criado.id } }), 0);
+    });
+
+    await t.test("apagar o produto leva o álbum junto", async () => {
+      const outro = await createProduct(db3, ator, {
+        sku: "ALBUM-002", title: "Some junto", price: "1.00", stock: 0, images: [A],
+      });
+      assert.equal(await db3.productImage.count({ where: { productId: outro.id } }), 1);
+      await db3.product.delete({ where: { id: outro.id } });
+      assert.equal(await db3.productImage.count({ where: { productId: outro.id } }), 0);
+    });
+
+    await t.test("a listagem devolve o álbum em ordem", async () => {
+      await updateProduct(db3, ator, criado.id, { ...base, images: [C, B, A] });
+      const produtos = await listProducts(db3, ator);
+      const alvo = produtos.find((p) => p.id === criado.id);
+      assert.deepEqual(alvo?.images.map((i) => i.url), [C, B, A]);
+    });
+  } finally { await db3.$disconnect(); }
 });

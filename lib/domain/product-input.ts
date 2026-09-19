@@ -53,15 +53,84 @@ function sku(value: unknown) {
   return texto.toUpperCase();
 }
 
-/// A imagem é opcional no catálogo, mas quando existe precisa ser https: o
-/// provedor busca a URL pelo servidor dele, e http seria recusado ou degradado.
-function imagem(value: unknown) {
+/// Limite do arquivo enviado, igual ao do Sebo On-Line: uma imagem que entra
+/// lá precisa entrar aqui, senão a publicação falha depois do cadastro.
+export const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+/// Base64 cresce 4 bytes a cada 3, mais o cabeçalho do data URI.
+const MAX_DATA_URI = Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 64;
+
+/// Formatos aceitos no upload. Lista fechada em vez de `image/*`: SVG é um
+/// documento, não uma imagem, e ainda que num <img> ele não execute script,
+/// nada garante que todo consumidor do catálogo o trate assim.
+const TIPOS_DE_IMAGEM = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"];
+
+export function tipoDeImagemAceito(tipo: string) {
+  return TIPOS_DE_IMAGEM.includes(tipo.trim().toLowerCase());
+}
+
+/// Teto do álbum. O Mercado Livre aceita 12 por anúncio; parar antes disso
+/// evita descobrir o limite do provedor só na hora de publicar.
+export const MAX_IMAGENS = 10;
+
+/**
+ * Uma imagem: URL https ou o arquivo enviado, guardado no banco como data URI
+ * em base64.
+ *
+ * O data URI é validado inteiro — tipo declarado e base64 bem formado — porque
+ * o que entra aqui vai para o banco e depois para o provedor. Um valor
+ * malformado só apareceria na hora da publicação, longe de quem o digitou.
+ */
+export function imagem(value: unknown) {
   if (value === undefined || value === null || value === "") return "";
-  const texto = textInput(value, "URL da imagem", 500);
+  if (typeof value !== "string") throw new OrderError("Imagem inválida.");
+  const texto = value.trim();
+
+  if (texto.startsWith("data:")) {
+    if (texto.length > MAX_DATA_URI) {
+      throw new OrderError(`A imagem excede o limite de ${MAX_IMAGE_BYTES / (1024 * 1024)} MB.`);
+    }
+    const partes = /^data:([a-z]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/.exec(texto);
+    if (!partes) throw new OrderError("Imagem enviada em formato inválido.");
+    if (!tipoDeImagemAceito(partes[1])) {
+      throw new OrderError("Formato de imagem não aceito. Use PNG, JPEG, WEBP, GIF ou AVIF.");
+    }
+    // Base64 vem em blocos de 4; qualquer outro tamanho é truncamento.
+    if (partes[2].length % 4 !== 0) throw new OrderError("Imagem enviada está incompleta.");
+    return texto;
+  }
+
+  // URL externa: https porque o provedor busca pelo servidor dele, e http
+  // seria recusado ou degradado.
+  if (texto.length > 500) throw new OrderError("URL da imagem inválida.");
   let url: URL;
   try { url = new URL(texto); } catch { throw new OrderError("URL da imagem inválida."); }
   if (url.protocol !== "https:") throw new OrderError("A URL da imagem precisa ser https.");
   return url.toString();
+}
+
+/**
+ * O álbum, na ordem em que foi montado.
+ *
+ * A primeira posição é a principal: é ela que vai para o provedor que aceita
+ * uma imagem só. Repetidas são descartadas em vez de recusadas — a mesma foto
+ * duas vezes é engano de quem cadastra, não erro que mereça travar o salvamento.
+ */
+function album(value: unknown) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new OrderError("Álbum de imagens inválido.");
+  if (value.length > MAX_IMAGENS) {
+    throw new OrderError(`O álbum aceita no máximo ${MAX_IMAGENS} imagens.`);
+  }
+  const vistas = new Set<string>();
+  const imagens: string[] = [];
+  for (const item of value) {
+    const url = imagem(item);
+    // Entrada vazia no meio da lista bagunçaria as posições.
+    if (!url || vistas.has(url)) continue;
+    vistas.add(url);
+    imagens.push(url);
+  }
+  return imagens;
 }
 
 export function parseProduct(input: unknown) {
@@ -77,7 +146,7 @@ export function parseProduct(input: unknown) {
     category: texto(value.category, "Categoria", 100, false),
     brand: texto(value.brand, "Marca", 100, false),
     condition: texto(value.condition, "Condição", 60, false),
-    imageUrl: imagem(value.imageUrl),
+    images: album(value.images),
     price: dinheiro(value.price, "Preço"),
     currency: moeda as Currency,
     stock: inteiroNaoNegativo(value.stock, "Estoque"),

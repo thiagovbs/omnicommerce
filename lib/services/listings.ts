@@ -1,6 +1,6 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
-import { Listing, PrismaClient, Product } from "@prisma/client";
+import { createHash, randomUUID } from "node:crypto";
+import { Listing, PrismaClient, Product, ProductImage } from "@prisma/client";
 import { providerDoCanal } from "../domain/marketplace-provider";
 import { OrderError, textInput } from "../domain/order-input";
 import { assertOrgAdmin } from "./access";
@@ -27,7 +27,9 @@ export const MAX_SYNC_ATTEMPTS = 8;
 /// pega o mesmo anúncio enquanto a primeira ainda está publicando.
 const LEASE_MS = 120000;
 
-export type ListingWithProduct = Listing & { product: Product };
+/// O produto vem com o álbum ordenado: a posição 0 é a principal, e é o que
+/// os provedores de imagem única recebem.
+export type ListingWithProduct = Listing & { product: Product & { images: ProductImage[] } };
 
 /// O que o adapter do provedor devolve depois de publicar ou atualizar. São os
 /// valores que o provedor CONFIRMOU, e não os que pedimos: se ele arredondar o
@@ -111,11 +113,27 @@ export async function requestPublication(
   });
 }
 
-/// Um anúncio publicado está em dia quando o que o provedor confirmou é o que
-/// o produto diz hoje. Comparado em Decimal: 10.00 e 10.0 são o mesmo preço.
+/// Impressão do álbum na ordem.
+///
+/// A lista é serializada em JSON antes do hash: com um separador qualquer,
+/// duas listas diferentes poderiam produzir a mesma string e, portanto, a
+/// mesma impressão. O JSON escapa o que precisa e não tem essa ambiguidade.
+export function hashAlbum(urls: string[]) {
+  return createHash("sha256").update(JSON.stringify(urls)).digest("hex");
+}
+
+/**
+ * Um anúncio publicado está em dia quando o que o provedor tem é o que o
+ * produto diz hoje.
+ *
+ * Preço em Decimal, porque 10.00 e 10.0 são o mesmo preço. E o álbum entra na
+ * comparação: sem ele, trocar só as imagens deixava o anúncio parecendo em dia
+ * e elas nunca chegavam ao provedor.
+ */
 export function estaEmDia(listing: ListingWithProduct) {
   if (listing.status !== "PUBLISHED") return false;
   if (listing.publishedStock !== listing.product.stock) return false;
+  if (listing.publishedImagesHash !== hashAlbum(listing.product.images.map((i) => i.url))) return false;
   return listing.publishedPrice !== null && listing.publishedPrice.equals(listing.product.price);
 }
 
@@ -138,7 +156,7 @@ export async function syncListings(db: PrismaClient, publish: ListingPublisher, 
       availableAt: { lte: agora },
       OR: [{ leaseUntil: null }, { leaseUntil: { lte: agora } }],
     },
-    include: { product: true },
+    include: { product: { include: { images: { orderBy: { position: "asc" } } } } },
     orderBy: { availableAt: "asc" },
     take: limit,
   });
@@ -182,6 +200,10 @@ export async function syncListings(db: PrismaClient, publish: ListingPublisher, 
           externalListingId: resultado.externalListingId,
           publishedPrice: resultado.price,
           publishedStock: resultado.stock,
+          // Preço e estoque vêm confirmados pelo provedor; do álbum guardamos
+          // o que foi ENVIADO, porque nenhum provedor devolve as imagens que
+          // aceitou. É a informação disponível, e a assimetria é declarada.
+          publishedImagesHash: hashAlbum(listing.product.images.map((i) => i.url)),
           lastPublishedAt: new Date(),
           needsSync: false, leaseUntil: null, leaseToken: null, lastError: null, attempts: 0,
         },

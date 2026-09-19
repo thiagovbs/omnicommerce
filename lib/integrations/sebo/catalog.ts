@@ -1,5 +1,5 @@
 import "server-only";
-import { Product } from "@prisma/client";
+import { Product, ProductImage } from "@prisma/client";
 import { objectInput, OrderError } from "../../domain/order-input";
 import { ProviderAuthError, ProviderTransientError } from "../mercadolivre/client";
 import { seboApiBase } from "./client";
@@ -22,7 +22,12 @@ function paraNumero(valor: string) {
   return Number(numero.toFixed(2));
 }
 
-export function seboProductPayload(product: Product) {
+/// O produto com o álbum já ordenado. O adapter recebe a lista inteira mesmo
+/// usando uma imagem só: quem decide quantas cabem é o provedor, não quem
+/// monta o payload.
+export type ProductWithImages = Product & { images: ProductImage[] };
+
+export function seboProductPayload(product: ProductWithImages) {
   return {
     sku: product.sku,
     name: product.title,
@@ -30,7 +35,8 @@ export function seboProductPayload(product: Product) {
     category: product.category,
     price: paraNumero(product.price.toFixed(2)),
     stock: product.stock,
-    image_url: product.imageUrl,
+    // O sebo aceita uma imagem só: vai a principal, que é a posição 0.
+    image_url: product.images[0]?.url ?? "",
     brand: product.brand,
     condition: product.condition,
     active: product.active,
@@ -38,7 +44,7 @@ export function seboProductPayload(product: Product) {
 }
 
 export async function publishSeboProduct(
-  token: string, product: Product, fetcher: typeof fetch = fetch,
+  token: string, product: ProductWithImages, fetcher: typeof fetch = fetch,
 ) {
   const response = await fetcher(`${seboApiBase()}/integration/products`, {
     method: "POST",

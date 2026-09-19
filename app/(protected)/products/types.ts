@@ -21,7 +21,9 @@ export interface ProductRow {
   category: string;
   brand: string;
   condition: string;
-  imageUrl: string;
+  /// Álbum na ordem do banco. A primeira é a principal, e é a que vai para
+  /// provedores que aceitam uma imagem só.
+  images: string[];
   price: string;
   currency: string;
   stock: number;

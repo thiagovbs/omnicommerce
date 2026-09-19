@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { AlertCircle, Check, Loader2, RefreshCw, Send, Trash2 } from "lucide-react";
+import { AlertCircle, Check, ImageOff, Loader2, RefreshCw, Send, Trash2 } from "lucide-react";
 import { ajustarEstoque, publicar, removerProduto, sincronizarAgora } from "./actions";
 import { ProductForm } from "./product-form";
 import type { ChannelRow, ListingRow, ProductRow } from "./types";
@@ -86,7 +86,26 @@ export function ProductsClient({ produtos, canais }: { produtos: ProductRow[]; c
         {produtos.map((produto) => (
           <div key={produto.id} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
             <div className="flex items-start justify-between gap-4 p-6">
-              <div className="min-w-0">
+              <div className="flex min-w-0 items-start gap-4">
+                {produto.images[0] ? (
+                  <div className="relative shrink-0">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={produto.images[0]} alt=""
+                      className="h-14 w-14 rounded-lg border border-gray-200 object-cover"
+                    />
+                    {produto.images.length > 1 && (
+                      <span className="absolute -right-1.5 -top-1.5 rounded-full bg-slate-900 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                        {produto.images.length}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-gray-50">
+                    <ImageOff size={18} className="text-gray-300" />
+                  </div>
+                )}
+                <div className="min-w-0">
                 <div className="flex items-center gap-3">
                   <h2 className="text-lg font-semibold text-gray-900 truncate">{produto.title}</h2>
                   <span className="font-mono text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{produto.sku}</span>
@@ -99,6 +118,7 @@ export function ProductsClient({ produtos, canais }: { produtos: ProductRow[]; c
                   {produto.category && <> · {produto.category}</>}
                   {produto.brand && <> · {produto.brand}</>}
                 </p>
+                </div>
               </div>
 
               <div className="flex items-center gap-2 shrink-0">

@@ -342,7 +342,6 @@ model Product {
   brand          String   @default("")
   /// Novo, usado, seminovo. Texto livre porque cada canal nomeia do seu jeito.
   condition      String   @default("")
-  imageUrl       String   @default("")
   price          Decimal  @db.Decimal(14, 2)
   currency       Currency @default(BRL)
   stock          Int      @default(0)
@@ -353,6 +352,7 @@ model Product {
   organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   listings     Listing[]
   movements    StockMovement[]
+  images       ProductImage[]
 
   @@unique([organizationId, sku])
   @@index([organizationId])
@@ -366,29 +366,37 @@ model Product {
 /// perguntar ao provedor, e é o que faz a sincronização ser idempotente: o
 /// trabalhador manda o valor absoluto do produto, nunca uma diferença.
 model Listing {
-  id                String        @id @default(cuid())
-  productId         String
-  marketplaceId     String
-  status            ListingStatus @default(DRAFT)
+  id                  String        @id @default(cuid())
+  productId           String
+  marketplaceId       String
+  status              ListingStatus @default(DRAFT)
   /// Identificador do anúncio no provedor. Só existe depois de publicado.
-  externalListingId String?
-  publishedPrice    Decimal?      @db.Decimal(14, 2)
-  publishedStock    Int?
-  lastPublishedAt   DateTime?
+  externalListingId   String?
+  publishedPrice      Decimal?      @db.Decimal(14, 2)
+  publishedStock      Int?
+  /// Impressão do álbum que foi enviado ao provedor, na ordem.
+  ///
+  /// Guardar a impressão, e não as URLs, porque uma imagem enviada é um data
+  /// URI de megabytes: repeti-lo aqui dobraria o armazenamento por anúncio.
+  /// Sem este campo, trocar só as imagens marcava o anúncio como pendente e o
+  /// trabalhador o considerava em dia -- preço e estoque não tinham mudado --
+  /// e as imagens novas nunca chegavam ao provedor.
+  publishedImagesHash String?
+  lastPublishedAt     DateTime?
   /// Há trabalho a fazer neste anúncio. Ligada quando o produto muda ou quando
   /// se pede publicação; desligada quando o provedor confirma. Sem ela o
   /// trabalhador teria que varrer todo anúncio publicado a cada rodada só para
   /// descobrir que nada mudou.
-  needsSync         Boolean       @default(true)
+  needsSync           Boolean       @default(true)
   /// Quando tentar de novo depois de falhar. Backoff exponencial.
-  availableAt       DateTime      @default(now())
-  attempts          Int           @default(0)
-  lastError         String?
+  availableAt         DateTime      @default(now())
+  attempts            Int           @default(0)
+  lastError           String?
   /// Lease do trabalhador, no mesmo desenho do outbox de entrada.
-  leaseUntil        DateTime?
-  leaseToken        String?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  leaseUntil          DateTime?
+  leaseToken          String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
   product     Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
   marketplace Marketplace @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
@@ -426,4 +434,27 @@ model StockMovement {
 
   @@index([organizationId, createdAt])
   @@index([productId, createdAt])
+}
+
+/// Álbum de imagens do produto.
+///
+/// Fica no produto, e não em cada anúncio: a foto é do item, não do canal, e
+/// um álbum por canal obrigaria a reenviar as mesmas imagens em cada um.
+/// Quem decide quantas usar é o adapter do provedor — os que aceitam uma só
+/// levam a posição 0.
+model ProductImage {
+  id        String   @id @default(cuid())
+  productId String
+  /// Ordem no álbum, começando em zero. A posição 0 é a principal.
+  position  Int
+  /// URL https ou data URI em base64 do arquivo enviado.
+  url       String
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// Duas imagens não ocupam a mesma posição: sem isso, "a principal" ficaria
+  /// ambígua e dependeria da ordem que o banco devolvesse.
+  @@unique([productId, position])
+  @@index([productId])
 }

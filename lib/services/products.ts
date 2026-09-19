@@ -19,8 +19,19 @@ import { serializable } from "./transactions";
 /// Campos cujo valor viaja para o provedor. Mexer em qualquer um deles torna o
 /// anúncio desatualizado.
 const CAMPOS_PUBLICADOS = [
-  "title", "description", "price", "stock", "imageUrl", "brand", "condition", "category", "active",
+  "title", "description", "price", "stock", "brand", "condition", "category", "active",
 ] as const;
+
+/// Grava o álbum inteiro de uma vez: apagar e recriar é mais simples que
+/// casar item a item, e a posição de cada imagem passa a ser o índice na
+/// lista — quem reordena na tela manda a ordem nova e pronto.
+async function gravarAlbum(tx: Prisma.TransactionClient, productId: string, images: string[]) {
+  await tx.productImage.deleteMany({ where: { productId } });
+  if (!images.length) return;
+  await tx.productImage.createMany({
+    data: images.map((url, position) => ({ productId, position, url })),
+  });
+}
 
 /// Registra a mudança de estoque junto com o saldo que ficou.
 ///
@@ -46,7 +57,7 @@ export async function marcarAnunciosPendentes(tx: Prisma.TransactionClient, prod
 }
 
 export async function createProduct(db: PrismaClient, actor: UserActor, input: unknown) {
-  const dados = parseProduct(input);
+  const { images, ...dados } = parseProduct(input);
   return serializable(db, async (tx) => {
     await assertOrgAdmin(tx, actor);
     const jaExiste = await tx.product.findUnique({
@@ -59,6 +70,7 @@ export async function createProduct(db: PrismaClient, actor: UserActor, input: u
       data: { ...dados, organizationId: actor.organizationId },
       select: { id: true, sku: true, title: true },
     });
+    await gravarAlbum(tx, product.id, images);
     await registrarMovimento(tx, {
       productId: product.id, organizationId: actor.organizationId,
       delta: dados.stock, balance: dados.stock, reason: "CREATION",
@@ -67,7 +79,9 @@ export async function createProduct(db: PrismaClient, actor: UserActor, input: u
       action: "CREATE", entity: "PRODUCT", entityId: product.id,
       organizationId: actor.organizationId, userId: actor.userId,
       details: "Produto " + product.sku + " criado.",
-      newData: { ...dados, price: dados.price.toFixed(2) },
+      // O álbum entra como contagem: um data URI de megabytes no registro de
+      // auditoria inflaria a tabela sem dizer nada útil.
+      newData: { ...dados, price: dados.price.toFixed(2), imagens: images.length },
     } });
     return product;
   });
@@ -75,12 +89,15 @@ export async function createProduct(db: PrismaClient, actor: UserActor, input: u
 
 export async function updateProduct(db: PrismaClient, actor: UserActor, productId: string, input: unknown) {
   const id = textInput(productId, "Produto");
-  const dados = parseProduct(input);
+  const { images, ...dados } = parseProduct(input);
   return serializable(db, async (tx) => {
     await assertOrgAdmin(tx, actor);
     // A organização vem da sessão e entra no filtro: id de produto vindo de um
     // formulário não alcança o catálogo de outro tenant.
-    const atual = await tx.product.findFirst({ where: { id, organizationId: actor.organizationId } });
+    const atual = await tx.product.findFirst({
+      where: { id, organizationId: actor.organizationId },
+      include: { images: { orderBy: { position: "asc" }, select: { url: true } } },
+    });
     if (!atual) throw new OrderError("Produto não encontrado.");
 
     if (dados.sku !== atual.sku) {
@@ -102,7 +119,14 @@ export async function updateProduct(db: PrismaClient, actor: UserActor, productI
       });
     }
 
-    const mudouPublicado = CAMPOS_PUBLICADOS.some((campo) => campo === "price"
+    // Ordem conta: trocar a principal muda o que o provedor recebe, mesmo que
+    // o conjunto de imagens seja o mesmo.
+    const albumAntigo = atual.images.map((i) => i.url);
+    const mudouAlbum = albumAntigo.length !== images.length
+      || albumAntigo.some((url, i) => url !== images[i]);
+    if (mudouAlbum) await gravarAlbum(tx, id, images);
+
+    const mudouPublicado = mudouAlbum || CAMPOS_PUBLICADOS.some((campo) => campo === "price"
       ? !atual.price.equals(dados.price)
       : atual[campo] !== dados[campo]);
     const pendentes = mudouPublicado ? (await marcarAnunciosPendentes(tx, id)).count : 0;
@@ -112,8 +136,11 @@ export async function updateProduct(db: PrismaClient, actor: UserActor, productI
       organizationId: actor.organizationId, userId: actor.userId,
       details: "Produto " + product.sku + " atualizado."
         + (pendentes ? " " + pendentes + " anúncio(s) para ressincronizar." : ""),
-      oldData: { sku: atual.sku, title: atual.title, price: atual.price.toFixed(2), stock: atual.stock, active: atual.active },
-      newData: { ...dados, price: dados.price.toFixed(2) },
+      oldData: {
+        sku: atual.sku, title: atual.title, price: atual.price.toFixed(2),
+        stock: atual.stock, active: atual.active, imagens: albumAntigo.length,
+      },
+      newData: { ...dados, price: dados.price.toFixed(2), imagens: images.length },
     } });
     return { ...product, anunciosPendentes: pendentes };
   });
@@ -213,6 +240,7 @@ export async function listProducts(db: PrismaClient, actor: UserActor) {
     where: { organizationId: actor.organizationId },
     orderBy: { createdAt: "desc" },
     include: {
+      images: { orderBy: { position: "asc" }, select: { id: true, url: true, position: true } },
       listings: {
         select: {
           id: true, status: true, needsSync: true, externalListingId: true,

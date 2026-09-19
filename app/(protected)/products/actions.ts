@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { currentActor } from "@/lib/current-actor";
 import { prisma } from "@/lib/prisma";
 import { OrderError, textInput } from "@/lib/domain/order-input";
+import { MAX_IMAGE_BYTES, tipoDeImagemAceito } from "@/lib/domain/product-input";
 import { providerPublisher } from "@/lib/integrations/publish";
 import { requestPublication, syncListings } from "@/lib/services/listings";
 import { createProduct, setProductStock, updateProduct } from "@/lib/services/products";
@@ -106,4 +107,36 @@ export async function removerProduto(productId: string) {
   } catch (erro) {
     return { ok: false as const, erro: mensagem(erro) };
   }
+}
+
+/**
+ * Converte a imagem enviada do computador em data URI base64.
+ *
+ * Feito no servidor, e não no navegador, por dois motivos: o limite de tamanho
+ * e o tipo do arquivo passam a ser conferidos onde o cliente não alcança, e o
+ * fluxo fica igual ao do Sebo On-Line, que também converte e devolve o data
+ * URI em vez de gravar. Devolver (em vez de gravar) deixa a mesma ação servir
+ * o cadastro, onde o produto ainda não tem id, e a edição.
+ */
+export async function converterImagem(formData: FormData) {
+  await currentActor();
+  const arquivo = formData.get("file");
+  if (!(arquivo instanceof File) || !arquivo.size) {
+    return { ok: false as const, erro: "Selecione um arquivo de imagem." };
+  }
+  if (!tipoDeImagemAceito(arquivo.type)) {
+    return { ok: false as const, erro: "Formato não aceito. Use PNG, JPEG, WEBP, GIF ou AVIF." };
+  }
+  if (arquivo.size > MAX_IMAGE_BYTES) {
+    return {
+      ok: false as const,
+      erro: `A imagem tem ${(arquivo.size / (1024 * 1024)).toFixed(1)} MB e o limite é ${MAX_IMAGE_BYTES / (1024 * 1024)} MB.`,
+    };
+  }
+  const base64 = Buffer.from(await arquivo.arrayBuffer()).toString("base64");
+  return {
+    ok: true as const,
+    dataUri: `data:${arquivo.type};base64,${base64}`,
+    bytes: arquivo.size,
+  };
 }
