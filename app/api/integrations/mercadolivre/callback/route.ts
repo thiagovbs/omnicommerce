@@ -12,7 +12,14 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 export async function GET(request: Request) {
-  const actor = await currentActor();
+  // O matcher do proxy exclui /api, então estas rotas tratam a sessão por conta
+  // própria: sem isto, sessão expirada vira 500 em vez de voltar ao login.
+  let actor;
+  try {
+    actor = await currentActor();
+  } catch {
+    redirect("/login");
+  }
   if (!isOrgAdmin(actor.role)) redirect("/dashboard");
 
   const params = new URL(request.url).searchParams;

@@ -12,7 +12,14 @@ export const runtime = "nodejs";
 // Inicia a autorização. O canal vem por query, mas é conferido dentro da
 // organização da sessão — quem escolhe o tenant é a sessão, nunca a URL.
 export async function GET(request: Request) {
-  const actor = await currentActor();
+  // O matcher do proxy exclui /api, então estas rotas tratam a sessão por conta
+  // própria: sem isto, sessão expirada vira 500 em vez de voltar ao login.
+  let actor;
+  try {
+    actor = await currentActor();
+  } catch {
+    redirect("/login");
+  }
   if (!isOrgAdmin(actor.role)) redirect("/dashboard");
 
   const marketplaceId = new URL(request.url).searchParams.get("marketplaceId") ?? "";
