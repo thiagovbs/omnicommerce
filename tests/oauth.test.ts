@@ -113,8 +113,8 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
       assert.equal(url.searchParams.get("client_id"), "123456");
       assert.equal(url.searchParams.get("state"), "nonce-abc");
       assert.equal(url.searchParams.get("redirect_uri"), `${APP}/api/integrations/mercadolivre/callback`);
-      // A doc do ML não manda escopo na URL: ele vem da aplicação no DevCenter.
-      assert.equal(url.searchParams.has("scope"), false);
+      // offline_access é o que faz o provedor emitir refresh token.
+      assert.match(url.searchParams.get("scope") ?? "", /offline_access/);
     });
   });
 
@@ -122,7 +122,7 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
     comAmbiente({ ...configurado, MERCADO_LIVRE_SCOPE: "offline_access" }, () => {
       assert.equal(new URL(authorizationUrl("n")).searchParams.get("scope"), "offline_access");
     });
-    comAmbiente({ ...configurado, MERCADO_LIVRE_SCOPE: undefined }, () => {
+    comAmbiente({ ...configurado, MERCADO_LIVRE_SCOPE: "" }, () => {
       assert.equal(new URL(authorizationUrl("n")).searchParams.has("scope"), false);
     });
   });

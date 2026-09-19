@@ -12,12 +12,16 @@ import { ProviderAuthError, ProviderTransientError } from "./client";
  */
 const AUTH_BASE_PADRAO = "https://auth.mercadolivre.com.br/authorization";
 const TOKEN_BASE_PADRAO = "https://api.mercadolibre.com/oauth/token";
-// A documentação do Mercado Livre monta a URL de autorização SEM parâmetro de
-// escopo: o escopo vem da configuração da aplicação no DevCenter, e a resposta
-// de token o ecoa ("scope": "offline_access"). Pedir escopo aqui foi uma
-// hipótese minha que não se confirmou. Fica configurável para o caso de a
-// aplicação precisar disso, mas o padrão segue a documentação.
-const SCOPE_PADRAO = "";
+// offline_access é o que faz o provedor emitir refresh token, e é um valor do
+// parâmetro scope da autorização — os permitidos são offline_access, read e
+// write. O guia rápido do ML monta a URL sem escopo, mas ali o fluxo termina no
+// access token; sem offline_access a conexão morre em seis horas.
+//
+// ATENÇÃO: o provedor só concede escopo novo em consentimento novo. Se a conta
+// já autorizou a aplicação antes, é preciso revogar o acesso nas aplicações
+// autorizadas do Mercado Livre — caso contrário ele reaproveita a autorização
+// antiga e o escopo pedido aqui não tem efeito.
+const SCOPE_PADRAO = "offline_access read write";
 
 export class OAuthConfigurationError extends Error {}
 
