@@ -76,6 +76,10 @@ export interface TokenSet {
   refreshToken: string | null;
   expiresAt: Date | null;
   externalAccountId: string;
+  /// Nomes dos campos que o provedor devolveu — nunca os valores. Serve para
+  /// distinguir "o provedor não mandou refresh_token" de "o código o descartou",
+  /// sem precisar espiar a resposta.
+  campos: string[];
 }
 
 function leiaTokenSet(corpo: unknown): TokenSet {
@@ -96,6 +100,7 @@ function leiaTokenSet(corpo: unknown): TokenSet {
     refreshToken: typeof dados.refresh_token === "string" && dados.refresh_token ? dados.refresh_token : null,
     expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
     externalAccountId,
+    campos: Object.keys(dados).sort(),
   };
 }
 
