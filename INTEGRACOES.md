@@ -3,7 +3,7 @@
 Primeira análise em 18/09/2026, atualizada em 19/09/2026 depois de a integração rodar em produção.
 Aplicação publicada em `https://omnicommerce.vercel.app` (Vercel), banco no Neon (`sa-east-1`), fila no QStash (`us-east-1`).
 
-**O Sebo On-Line está integrado e validado de ponta a ponta com pedido real.** O Mercado Livre está conectado, mas nenhuma venda real passou por ele — o mapeamento de valores dele segue sem validação, e é a pendência de maior risco.
+**Os dois provedores estão integrados e validados de ponta a ponta com pedido real**, cada um com a notificação entregue pelo próprio provedor. No Mercado Livre a validação foi feita com usuários de teste criados pela API.
 
 ## Decisões tomadas
 
@@ -46,6 +46,18 @@ Dois segundos entre a compra e o aviso. Venda gravada com valores conferindo com
 
 Estão provados: emissão pelo sebo, recepção autenticada, resolução de conexão, fila durável, verificação de assinatura, busca pelo gateway, normalização e gravação.
 
+Compra real no Mercado Livre, 19/09/2026, com usuários de teste criados pela API (`POST /users/test_user`):
+
+| Hora | Etapa |
+|---|---|
+| 22:18:25 | compra fechada no ML |
+| 22:18:29 | ML emitiu o aviso; o webhook gravou em 153 ms |
+| 22:18:31, 22:18:32 | segundo e terceiro avisos do mesmo pedido |
+| 22:19:04 | job consultou o pedido e gravou a venda |
+| 22:19:06 | os três eventos concluídos |
+
+Quatro segundos entre a compra e o aviso. Dos três avisos, o primeiro virou `PROCESSED` e os outros dois `IGNORED`: uma venda, um registro de histórico, nenhuma duplicata — idempotência exercitada com dado real, não com dublê. Valores conferidos contra a resposta do ML: bruto 123,45 (`total_amount`, igual à soma dos itens), taxas 16,05 (`sale_fee`), frete 0,00 vindo de `payments[].shipping_cost` (zero declarado, não presumido), líquido 107,40.
+
 ## Defeitos que só o dado real revelou
 
 Nenhum destes aparecia com a suíte verde. É o argumento mais concreto a favor de validar contra payload e ambiente reais antes de confiar numa integração.
@@ -55,7 +67,8 @@ Nenhum destes aparecia com a suíte verde. É o argumento mais concreto a favor 
 3. **`APP_URL` com `vercel.ap`.** Um caractere a menos fazia a verificação de assinatura recusar toda entrega com 401, com a fila parecendo configurada.
 4. **`QSTASH_URL` ausente.** Projeto QStash regional não é atendido pelo endpoint global, que responde 404. A variável estava documentada como opcional — não é.
 5. **Botão de autorizar em qualquer canal.** Como a conexão é única por `(provider, externalAccountId)` e o upsert reescreve o `marketplaceId`, autorizar o ML a partir da linha errada moveria a conexão, e os pedidos do ML passariam a entrar noutro canal sem erro visível.
-6. **Rotas de API sem proteção de sessão.** O matcher do proxy exclui `/api`, então authorize e callback devolviam 500 em vez de mandar ao login — e o callback descartaria o código de autorização.
+6. **URL de notificações truncada no DevCenter.** O campo corta em 120 caracteres sem avisar. Com `openssl rand -hex 32` -- que era a receita no próprio `.env.example` -- a URL fica com 122 e o portal salva os 120 primeiros, exibindo a URL cortada como se estivesse correta. Os dois últimos caracteres do segredo somem e **toda** notificação do Mercado Livre bate num 404. O segredo passou a ser de 32 caracteres.
+7. **Rotas de API sem proteção de sessão.** O matcher do proxy exclui `/api`, então authorize e callback devolviam 500 em vez de mandar ao login — e o callback descartaria o código de autorização.
 
 O que encurtou cada diagnóstico foi instrumentação, não tentativa: o status HTTP no erro de publicação, o destino assinado na resposta do dispatcher, e os nomes dos campos, o escopo pedido e o escopo concedido na auditoria da conexão. Vale manter.
 
@@ -69,11 +82,11 @@ O que encurtou cada diagnóstico foi instrumentação, não tentativa: o status 
 
 ## O que falta
 
-1. **Validar o normalizador do Mercado Livre contra um pedido real.** É a pendência de maior risco. A conta não tem vendas; o usuário de teste do ML permitiria criar uma. O mapeamento está isolado em `lib/integrations/mercadolivre/normalize.ts` e coberto por fixture — trocar a fixture por um pedido real faz qualquer divergência virar teste vermelho, como já aconteceu com o sebo.
-3. **Estado de envio**, integrando o recurso de shipments do ML.
-4. **Shopee**, depois de conferir permissões e documentação acessível na conta. O resolver falha com erro nomeado para esse provedor.
-5. **Precisão no dashboard**: a agregação ainda converte Decimal para Number na exibição, o que perde precisão em somas grandes. O caminho de pedidos usa Decimal de ponta a ponta.
-6. **Catálogo, estoque e preços**, com regras de origem próprias.
+1. **Conciliação do Mercado Livre**, em `lib/integrations/reconcile.ts`. Agora existe um pedido real na conta de teste para confirmar os parâmetros de busca por data, que antes não dava para exercitar.
+2. **Estado de envio**, integrando o recurso de shipments do ML.
+3. **Shopee**, depois de conferir permissões e documentação acessível na conta. O resolver falha com erro nomeado para esse provedor.
+4. **Precisão no dashboard**: a agregação ainda converte Decimal para Number na exibição, o que perde precisão em somas grandes. O caminho de pedidos usa Decimal de ponta a ponta.
+5. **Catálogo, estoque e preços**, com regras de origem próprias.
 
 ## Estrutura
 
@@ -106,7 +119,7 @@ O seed não roda no build: banco novo nasce sem organização e sem usuário, e 
 
 ## Limites do que foi verificado
 
-- O Sebo On-Line foi validado com pedido real em produção. **O Mercado Livre não**: nenhuma venda passou por ele, e o mapeamento de valores é intenção declarada.
+- Os dois provedores foram validados com pedido real em produção. No Mercado Livre foi **um** pedido, de um usuário de teste, com um item, sem frete e sem desconto: o mapeamento de frete, cupom e múltiplos itens continua coberto só por fixture.
 - O portal de desenvolvedores do Mercado Livre responde 403 a consulta automatizada. Os endpoints de autorização e token foram confirmados na prática — a autorização fecha e a conexão é gravada — mas continuam configuráveis por variável.
 - Não houve medição de latência do webhook, teste de carga nem exploração de segurança.
 - A renovação de token do ML nunca rodou de verdade, porque o provedor não emite refresh token para esta aplicação. O caminho está coberto por teste com dublê, incluindo a corrida do compare-and-swap.
