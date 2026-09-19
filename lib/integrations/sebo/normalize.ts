@@ -12,7 +12,8 @@ import { OrderStatus } from "../../domain/sale-status";
  *
  * Campos esperados:
  * - id, status, total, created_at, updated_at
- * - items[]: name, unit_price, quantity, product_id
+ * - items[]: name, unit_price, quantity, product_id, sku (vazio se o produto
+ *   não foi publicado por aqui)
  * - customer: name, email (opcionais)
  *
  * Decisões de valor, todas explícitas:
@@ -66,7 +67,9 @@ export function normalizeSeboOrder(input: unknown) {
     itemsTotal = itemsTotal.add(unitPrice.mul(item.quantity));
     return {
       title: textInput(item.name, "Nome do item", 500),
-      sku: null,
+      // O SKU liga o item de volta ao catálogo, e é o que permite baixar
+      // estoque. Produto que não nasceu de publicação vem com o campo vazio.
+      sku: optionalText(item.sku, 60)?.toUpperCase() ?? null,
       externalItemId: optionalText(item.product_id, 200),
       externalVariationId: null,
       quantity: item.quantity,

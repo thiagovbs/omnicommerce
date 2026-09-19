@@ -67,6 +67,18 @@ enum OutboxStatus {
   FAILED
 }
 
+/// Estado de um anúncio num canal. PUBLISHING existe para separar "pedimos
+/// para publicar" de "o provedor confirmou": sem isso, uma falha no meio
+/// deixaria o anúncio parecendo rascunho e ele seria publicado duas vezes.
+enum ListingStatus {
+  DRAFT
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  PAUSED
+  CLOSED
+}
+
 enum Currency {
   BRL
   USD
@@ -82,6 +94,7 @@ model Organization {
   users        User[]
   marketplaces Marketplace[]
   sales        Sale[]
+  products     Product[]
 }
 
 model User {
@@ -114,6 +127,7 @@ model Marketplace {
   sales             Sale[]
   integrationEvents IntegrationEvent[]
   connections       MarketplaceConnection[]
+  listings          Listing[]
 
   @@unique([organizationId, code])
   @@index([organizationId])
@@ -299,4 +313,77 @@ model OutboxMessage {
   event       IntegrationEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([status, availableAt, leaseUntil])
+}
+
+/// Catálogo da organização: a fonte da verdade de preço e estoque.
+///
+/// O que está aqui é o que DEVERIA estar em cada canal. Os canais guardam o
+/// que já foi confirmado (ver Listing), e a diferença entre os dois é o que o
+/// sincronizador tem para fazer.
+model Product {
+  id             String   @id @default(cuid())
+  organizationId String
+  /// Identificação do produto para quem opera. É a chave que liga um item de
+  /// venda que chega do marketplace de volta ao catálogo.
+  sku            String
+  title          String
+  description    String   @default("")
+  category       String   @default("")
+  brand          String   @default("")
+  /// Novo, usado, seminovo. Texto livre porque cada canal nomeia do seu jeito.
+  condition      String   @default("")
+  imageUrl       String   @default("")
+  price          Decimal  @db.Decimal(14, 2)
+  currency       Currency @default(BRL)
+  stock          Int      @default(0)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  listings     Listing[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId])
+  @@index([organizationId, active])
+}
+
+/// Um produto publicado (ou a publicar) num canal.
+///
+/// `publishedPrice` e `publishedStock` são o que o provedor confirmou, não o
+/// que queremos. Guardá-los aqui é o que permite decidir o que sincronizar sem
+/// perguntar ao provedor, e é o que faz a sincronização ser idempotente: o
+/// trabalhador manda o valor absoluto do produto, nunca uma diferença.
+model Listing {
+  id                String        @id @default(cuid())
+  productId         String
+  marketplaceId     String
+  status            ListingStatus @default(DRAFT)
+  /// Identificador do anúncio no provedor. Só existe depois de publicado.
+  externalListingId String?
+  publishedPrice    Decimal?      @db.Decimal(14, 2)
+  publishedStock    Int?
+  lastPublishedAt   DateTime?
+  /// Há trabalho a fazer neste anúncio. Ligada quando o produto muda ou quando
+  /// se pede publicação; desligada quando o provedor confirma. Sem ela o
+  /// trabalhador teria que varrer todo anúncio publicado a cada rodada só para
+  /// descobrir que nada mudou.
+  needsSync         Boolean       @default(true)
+  /// Quando tentar de novo depois de falhar. Backoff exponencial.
+  availableAt       DateTime      @default(now())
+  attempts          Int           @default(0)
+  lastError         String?
+  /// Lease do trabalhador, no mesmo desenho do outbox de entrada.
+  leaseUntil        DateTime?
+  leaseToken        String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  product     Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  marketplace Marketplace @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+
+  /// Um produto tem no máximo um anúncio por canal.
+  @@unique([productId, marketplaceId])
+  @@index([marketplaceId])
+  @@index([needsSync, availableAt])
 }

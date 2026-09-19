@@ -2,7 +2,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { OrderError } from "../domain/order-input";
 import { isOrgAdmin, isPlatformAdmin, UserRoleName } from "../domain/roles";
-import { assertActor, UserActor } from "./sales";
+import { assertActor, UserActor } from "./actor";
 
 // The role is re-read from the database inside the transaction: a role supplied by the
 // caller (session claim, form field) is never authoritative for an authorization decision.

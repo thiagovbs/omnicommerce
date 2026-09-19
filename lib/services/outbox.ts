@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { OrderError } from "../domain/order-input";
 import { isOrgAdmin } from "../domain/roles";
-import { assertActor, UserActor } from "./sales";
+import { assertActor, UserActor } from "./actor";
 import { serializable } from "./transactions";
 
 export type EventPublisher = (message: { eventId: string; deduplicationId: string }) => Promise<void>;

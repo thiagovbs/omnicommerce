@@ -2,15 +2,12 @@ import "server-only";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { canChangeStatus, isOrderStatus } from "../domain/sale-status";
 import { IntegratedOrder, objectInput, OrderError, parseOrder, textInput } from "../domain/order-input";
+import { baixarEstoquePorVenda, devolverEstoquePorCancelamento } from "./products";
+import { assertActor, UserActor } from "./actor";
 import { serializable } from "./transactions";
 
-export type UserActor = { userId: string; organizationId: string };
+export { assertActor, type UserActor } from "./actor";
 
-export async function assertActor(tx: Prisma.TransactionClient, actor: UserActor) {
-  if (!actor.userId || !actor.organizationId || !await tx.user.findFirst({
-    where: { id: actor.userId, organizationId: actor.organizationId }, select: { id: true },
-  })) throw new OrderError("Não autorizado.");
-}
 
 export async function createManualOrder(db: PrismaClient, actor: UserActor, input: unknown) {
   const raw = objectInput(input);
@@ -86,6 +83,14 @@ export async function applyIntegratedOrder(tx: Prisma.TransactionClient, context
     ? await tx.sale.update({ where: { id: existing.id }, data: { ...data, items: { deleteMany: {}, create: items } } })
     : await tx.sale.create({ data: { ...data, marketplaceId: context.marketplaceId, organizationId: context.organizationId,
       source: "INTEGRATION", items: { create: items } } });
+  // Estoque só se move nas duas bordas: quando a venda nasce e quando ela é
+  // cancelada. Atualização de uma venda já conhecida não mexe, senão cada
+  // reenvio do mesmo pedido debitaria de novo.
+  if (!existing && order.status !== "CANCELLED") {
+    await baixarEstoquePorVenda(tx, context.organizationId, items);
+  } else if (existing && existing.status !== "CANCELLED" && order.status === "CANCELLED") {
+    await devolverEstoquePorCancelamento(tx, context.organizationId, items);
+  }
   if (statusChanged) await tx.saleStatusHistory.create({ data: {
     saleId: sale.id, fromStatus: existing?.status, toStatus: order.status, source: "INTEGRATION", version,
     externalEventId: context.externalEventId, externalStatus: order.externalStatus, occurredAt: order.externalUpdatedAt,

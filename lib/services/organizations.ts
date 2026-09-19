@@ -3,7 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { objectInput, OrderError, textInput } from "../domain/order-input";
 import { isPlatformAdmin } from "../domain/roles";
 import { assertOrganizationAccess, assertOrgAdmin } from "./access";
-import { UserActor } from "./sales";
+import { UserActor } from "./actor";
 import { serializable } from "./transactions";
 
 export async function upsertOrganization(db: PrismaClient, actor: UserActor, input: unknown) {

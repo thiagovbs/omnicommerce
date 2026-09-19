@@ -4,7 +4,7 @@ import { hash } from "bcryptjs";
 import { objectInput, OrderError, textInput } from "../domain/order-input";
 import { isOrgAdmin, isPlatformAdmin, isUserRole } from "../domain/roles";
 import { assertOrganizationAccess, assertOrgAdmin } from "./access";
-import { UserActor } from "./sales";
+import { UserActor } from "./actor";
 import { serializable } from "./transactions";
 
 function emailInput(value: unknown) {

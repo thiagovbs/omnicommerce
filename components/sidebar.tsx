@@ -20,6 +20,7 @@ const everyone = () => true;
 const menuItems = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, visible: everyone },
   { name: "Vendas", href: "/sales", icon: ShoppingBag, visible: everyone },
+  { name: "Produtos", href: "/products", icon: Package, visible: everyone },
   { name: "Marketplaces", href: "/marketplaces", icon: Store, visible: everyone },
   { name: "Integrações", href: "/integrations", icon: History, visible: isOrgAdmin },
   { name: "Equipe", href: "/users", icon: Users, visible: isOrgAdmin },

@@ -15,6 +15,7 @@ export const proxy = auth((req) => {
   // sem sessão, currentActor() lança e a página responderia 500 em vez de redirecionar.
   const protectedRoutes = [
     "/dashboard", "/sales", "/users", "/marketplaces", "/organizations", "/audit", "/integrations",
+    "/products",
   ];
   const isProtectedRoute = protectedRoutes.some((route) => nextUrl.pathname.startsWith(route));
 

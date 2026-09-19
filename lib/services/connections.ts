@@ -4,7 +4,7 @@ import { providerDoCanal } from "../domain/marketplace-provider";
 import { OrderError, textInput } from "../domain/order-input";
 import { encryptSecret } from "../integrations/crypto";
 import { assertOrgAdmin } from "./access";
-import { UserActor } from "./sales";
+import { UserActor } from "./actor";
 import { serializable } from "./transactions";
 
 export interface ProviderTokens {
