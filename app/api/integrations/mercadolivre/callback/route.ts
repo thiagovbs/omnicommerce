@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { currentActor } from "@/lib/current-actor";
 import { OrderError } from "@/lib/domain/order-input";
 import { isOrgAdmin } from "@/lib/domain/roles";
-import { exchangeCode } from "@/lib/integrations/mercadolivre/oauth";
+import { exchangeCode, oauthConfig } from "@/lib/integrations/mercadolivre/oauth";
 import { lerEstado, STATE_COOKIE } from "@/lib/integrations/oauth-state";
 import { prisma } from "@/lib/prisma";
 import { saveProviderConnection } from "@/lib/services/connections";
@@ -45,7 +45,8 @@ export async function GET(request: Request) {
       provider: "MERCADO_LIVRE",
       marketplaceId: estado.marketplaceId,
       externalAccountId: tokens.externalAccountId,
-      tokens,
+      // O escopo pedido vem da mesma configuração que montou a autorização.
+      tokens: { ...tokens, escopoPedido: oauthConfig().scope || null },
     });
   } catch (error) {
     // Motivo de domínio vai para a tela; qualquer outro fica genérico, porque

@@ -15,6 +15,9 @@ export interface ProviderTokens {
   campos?: string[];
   /// Permissões concedidas, como o provedor as reporta. Não é credencial.
   escopoConcedido?: string | null;
+  /// Permissões que ESTA versão do código pediu. Sem isto não dá para separar
+  /// "o provedor recusou o escopo" de "o código nem pediu".
+  escopoPedido?: string | null;
 }
 
 // Grava a loja autorizada. A organização vem da sessão e o marketplace é
@@ -80,6 +83,7 @@ export async function saveProviderConnection(db: PrismaClient, actor: UserActor,
         expiresAt: credenciais.expiresAt, renovavel: credenciais.refreshToken !== null,
         camposDoProvedor: input.tokens.campos ?? [],
         escopoConcedido: input.tokens.escopoConcedido ?? null,
+        escopoPedido: input.tokens.escopoPedido ?? null,
       },
     } });
     return { id: connection.id, marketplace: marketplace.name };

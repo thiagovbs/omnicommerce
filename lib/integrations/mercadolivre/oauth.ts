@@ -56,6 +56,7 @@ export function oauthConfig() {
     tokenBase: tokenBase.toString(),
     // Precisa bater EXATAMENTE com o que está cadastrado na aplicação do ML.
     redirectUri: new URL("/api/integrations/mercadolivre/callback", app).toString(),
+    scope: (process.env.MERCADO_LIVRE_SCOPE ?? SCOPE_PADRAO).trim(),
   };
 }
 
@@ -71,8 +72,7 @@ export function authorizationUrl(state: string) {
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("redirect_uri", config.redirectUri);
   url.searchParams.set("state", state);
-  const escopo = process.env.MERCADO_LIVRE_SCOPE ?? SCOPE_PADRAO;
-  if (escopo.trim()) url.searchParams.set("scope", escopo.trim());
+  if (config.scope) url.searchParams.set("scope", config.scope);
   return url.toString();
 }
 
