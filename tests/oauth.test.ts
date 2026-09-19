@@ -43,6 +43,7 @@ const configurado = {
   MERCADO_LIVRE_APP_SECRET: "segredo-da-aplicacao",
   APP_URL: APP,
   MERCADO_LIVRE_AUTH_URL: undefined,
+  MERCADO_LIVRE_SCOPE: undefined,
   MERCADO_LIVRE_TOKEN_URL: undefined,
   INTEGRATION_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
 };
@@ -112,6 +113,17 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
       assert.equal(url.searchParams.get("client_id"), "123456");
       assert.equal(url.searchParams.get("state"), "nonce-abc");
       assert.equal(url.searchParams.get("redirect_uri"), `${APP}/api/integrations/mercadolivre/callback`);
+      // offline_access é o que faz o provedor emitir refresh token.
+      assert.match(url.searchParams.get("scope") ?? "", /offline_access/);
+    });
+  });
+
+  await t.test("escopo é configurável e pode ser desligado", () => {
+    comAmbiente({ ...configurado, MERCADO_LIVRE_SCOPE: "offline_access" }, () => {
+      assert.equal(new URL(authorizationUrl("n")).searchParams.get("scope"), "offline_access");
+    });
+    comAmbiente({ ...configurado, MERCADO_LIVRE_SCOPE: "" }, () => {
+      assert.equal(new URL(authorizationUrl("n")).searchParams.has("scope"), false);
     });
   });
 

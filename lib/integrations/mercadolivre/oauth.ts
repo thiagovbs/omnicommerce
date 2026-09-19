@@ -12,6 +12,11 @@ import { ProviderAuthError, ProviderTransientError } from "./client";
  */
 const AUTH_BASE_PADRAO = "https://auth.mercadolivre.com.br/authorization";
 const TOKEN_BASE_PADRAO = "https://api.mercadolibre.com/oauth/token";
+// Sem offline_access o provedor não emite refresh token, e a conexão para de
+// funcionar quando o access token vence. Marcar o escopo na aplicação do
+// DevCenter não bastou: ele também precisa ser pedido aqui.
+// MERCADO_LIVRE_SCOPE="" desliga o parâmetro, se o provedor recusá-lo.
+const SCOPE_PADRAO = "offline_access read write";
 
 export class OAuthConfigurationError extends Error {}
 
@@ -61,6 +66,8 @@ export function authorizationUrl(state: string) {
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("redirect_uri", config.redirectUri);
   url.searchParams.set("state", state);
+  const escopo = process.env.MERCADO_LIVRE_SCOPE ?? SCOPE_PADRAO;
+  if (escopo.trim()) url.searchParams.set("scope", escopo.trim());
   return url.toString();
 }
 

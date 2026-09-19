@@ -68,8 +68,13 @@ export async function saveProviderConnection(db: PrismaClient, actor: UserActor,
       action: existente ? "UPDATE" : "CREATE", entity: "MARKETPLACE_CONNECTION", entityId: connection.id,
       organizationId: actor.organizationId, userId: actor.userId,
       details: `Conexão ${input.provider}/${externalAccountId} autorizada em ${marketplace.name}.`,
-      // Nunca o token: só o que identifica a conexão.
-      newData: { provider: input.provider, externalAccountId, marketplaceId, expiresAt: credenciais.expiresAt },
+      // Nunca o token: só o que identifica a conexão, mais se ela é renovável.
+      // Sem esse sinal, descobrir que o provedor não mandou refresh token exige
+      // ir ao banco — e o sintoma só aparece quando o access token vence.
+      newData: {
+        provider: input.provider, externalAccountId, marketplaceId,
+        expiresAt: credenciais.expiresAt, renovavel: credenciais.refreshToken !== null,
+      },
     } });
     return { id: connection.id, marketplace: marketplace.name };
   });
