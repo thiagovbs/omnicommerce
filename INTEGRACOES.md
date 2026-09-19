@@ -1,135 +1,112 @@
-﻿# Integração Mercado Livre + Shopee — diagnóstico e proposta
+﻿# Integração de marketplaces — estado e pendências
 
-Análise em 18/09/2026, atualizada no mesmo dia após a implementação da recepção e do processamento.
-Destino informado: Vercel ou outra plataforma serverless.
-Escopo desta atualização: o encanamento da fila, o modelo de conexão e o adapter do Mercado Livre foram implementados e cobertos por testes contra PostgreSQL com dublês. Nenhuma chamada real ao Mercado Livre ou ao QStash foi feita e nenhuma credencial foi provisionada.
+Primeira análise em 18/09/2026, atualizada em 19/09/2026 depois de a integração rodar em produção.
+Aplicação publicada em `https://omnicommerce.vercel.app` (Vercel), banco no Neon (`sa-east-1`), fila no QStash (`us-east-1`).
+
+**O Sebo On-Line está integrado e validado de ponta a ponta com pedido real.** O Mercado Livre está conectado, mas nenhuma venda real passou por ele — o mapeamento de valores dele segue sem validação, e é a pendência de maior risco.
 
 ## Decisões tomadas
 
-- **Fila:** QStash para entrega HTTP dos trabalhos, mantendo Next.js, Prisma e PostgreSQL. RabbitMQ foi descartado por exigir broker gerenciado e um consumidor contínuo hospedado. SQS com Lambda segue como alternativa caso a infraestrutura migre para AWS.
-- **Estágio do payload:** `IntegrationEvent.payload` guarda a notificação crua; consultar o pedido e normalizar acontece no job. Um salto de fila por notificação. A alternativa de um modelo de inbox cru separado foi descartada por dobrar o consumo de cota e por exigir dois modelos e dois outbox em operação.
-- **Agendador:** schedule do próprio QStash chamando o dispatcher, para não amarrar a decisão de hospedagem. Cron da Vercel foi descartado por prender o deploy e por ter frequência diária no plano Hobby.
-- **Módulos no mesmo repositório**, sem microsserviços. Estoque, preços e publicação de anúncios seguem fora de escopo porque esses domínios não existem no banco.
+- **Fila:** QStash para entrega HTTP, mantendo Next.js, Prisma e PostgreSQL. RabbitMQ foi descartado por exigir broker gerenciado e consumidor contínuo hospedado.
+- **Estágio do payload:** `IntegrationEvent.payload` guarda a notificação crua; consultar o pedido e normalizar acontece no job. Um salto de fila por notificação.
+- **Agendador:** schedule do próprio QStash (`omnicommerce-dispatch-outbox`, a cada 5 minutos) chamando o dispatcher, para não amarrar a hospedagem.
+- **Loja própria pelo mesmo caminho dos marketplaces:** o Sebo entra como provedor `SEBO_ONLINE` e reaproveita todo o pipeline. Um modelo mental só.
+- **Migrations na publicação:** Build Command `npm run build:vercel`. O `build` normal não toca o banco, senão o estágio builder do Dockerfile quebraria.
 
 ## O que existe
 
-Verificado por leitura do código e por 55 testes automatizados. `npm run test:orders` sobe PostgreSQL 16 em contêiner efêmero, aplica as migrations, checa divergência entre schema e migrations e roda as suítes; `npm run test:models` valida as migrations do modelo de pedidos.
+Verificado por leitura do código e por **80 testes automatizados**. `npm run test:orders` sobe PostgreSQL 16 em contêiner efêmero, aplica as 8 migrations, aborta se houver divergência entre schema e migrations, e roda as suítes. Nenhum teste toca a rede: provedores e publicação são dublês.
 
-Base:
-- package.json: Next.js 16.2.6, React 19.2.4, TypeScript, NextAuth 5 beta e Prisma 6.
-- prisma/schema.prisma: Organization, User, Marketplace, MarketplaceConnection, Sale, SaleItem, SaleStatusHistory, IntegrationEvent, OutboxMessage e AuditLog.
-- Sale tem valores monetários Decimal, `statusVersion` para concorrência otimista e restrição única por marketplaceId + externalOrderId.
-- Dockerfile e docker-compose.yaml: execução standalone com app e PostgreSQL locais. Isso não comprova implantação em produção.
-- O seed cadastra Mercado Livre, Shopee e Amazon como nomes e códigos. Cadastro de canal não equivale a conexão autorizada: a autorização vive em MarketplaceConnection.
-
-Autorização e domínio:
-- lib/current-actor.ts resolve ator, organização e papel no banco. Papel vindo da sessão ou de formulário não decide autorização; os serviços releem o papel dentro da transação.
-- Perfis: PLATFORM_ADMIN é o único que cruza organizações, ADMIN administra a própria e OPERATOR apenas opera vendas.
-- lib/services/sales.ts separa operação humana de importação. lib/services/members.ts e lib/services/organizations.ts fazem gestão de equipe e de empresas, com auditoria na mesma transação.
-- lib/domain/order-input.ts valida dinheiro em Decimal e rejeita datas impossíveis; lib/domain/sale-status.ts concentra as transições permitidas.
-- Transações em Serializable com repetição de P2034 em lib/services/transactions.ts.
+Base e autorização:
+- Next.js 16.2.6, React 19.2.4, Prisma 6, NextAuth 5 beta.
+- Perfis: `PLATFORM_ADMIN` é o único que cruza organizações, `ADMIN` administra a própria, `OPERATOR` só opera vendas. O papel é relido no banco dentro da transação — claim de sessão ou campo de formulário não decide autorização.
+- Transações em Serializable com repetição de P2034.
 
 Fila e integração:
-- IntegrationEvent e OutboxMessage com claim atômico por lease, backoff exponencial até oito tentativas de publicação e idempotência por marketplaceId + externalEventId.
-- lib/messaging/qstash.ts publica com destino fixo e lista de hosts permitidos, e verifica assinatura com rotação de chave.
-- O processamento tem teto de tentativas: esgotado, o evento vira FAILED e aparece em /integrations para reprocessamento, em vez de permanecer PENDING depois que a fila desiste.
-- lib/integrations/mercadolivre/ contém parser do aviso, cliente, normalizador e recepção do webhook. O `resource` do aviso nunca é usado como URL: o id é extraído e a chamada remontada num host fixo.
-- Tokens das conexões são cifrados em AES-256-GCM (lib/integrations/crypto.ts) e nunca vão ao navegador nem a log.
-- Rotas: app/api/webhooks/mercadolivre/[secret], app/api/jobs/marketplace-events e app/api/jobs/dispatch-outbox.
+- `IntegrationEvent` + `OutboxMessage` com claim atômico por lease, backoff exponencial e idempotência por `marketplaceId + externalEventId`.
+- Teto de tentativas no processamento: esgotado, o evento vira `FAILED` e aparece em `/integrations` para reprocessar, em vez de ficar `PENDING` depois que a fila desiste.
+- `MarketplaceConnection` representa a loja autorizada, com credenciais em AES-256-GCM e unicidade por `(provider, externalAccountId)` — é o que faz uma notificação resolver para exatamente um tenant.
+- Recepção comum em `lib/integrations/webhook.ts`: Mercado Livre e Sebo compartilham autenticação por segredo, validação, resolução de conexão e gravação.
+- OAuth do Mercado Livre: `state` cifrado em cookie de uso único (só o nonce viaja na URL), renovação de token com compare-and-swap pelo `updatedAt`, e recusa de renovação marcando a conexão `EXPIRED`.
+- O provedor de um canal é derivado do código do canal, num lugar só que tela e backend compartilham.
 
-## Ajustes que precediam a integração
+## Jornada validada em produção
 
-Os seis pontos do diagnóstico original estão resolvidos, com uma ressalva no quinto.
+Compra real no Sebo On-Line, 18/09/2026:
 
-1. **Isolamento por organização.** As ações derivam a organização da sessão e conferem as entidades no servidor; no processamento automático a organização vem da conexão registrada, nunca do corpo recebido. Testes cobrem rejeição entre organizações em vendas, equipe, empresas e eventos.
-2. **Auditoria de sistema.** AuditLog aceita ator humano ou de integração, com vínculo ao evento. Venda, itens, histórico e auditoria confirmam na mesma transação; há teste que derruba a auditoria por trigger e verifica que nada sobra. O antigo lib/audit.ts, que desistia sem sessão, foi removido.
-3. **Serviço de pedidos.** Serviço de domínio independente de sessão e de revalidatePath, com mapeamento de estados externos, upsert, versão de status e tratamento de evento atrasado. DELIVERED passou a admitir REFUNDED.
-4. **Contas por canal.** MarketplaceConnection representa cada loja autorizada, com índice único por provedor e conta externa — é o que faz uma notificação resolver para exatamente um tenant. A identidade do pedido segue em marketplaceId + externalOrderId, preservando vendas manuais e relatórios.
-5. **Precisão financeira.** O caminho de pedidos usa Decimal de ponta a ponta, e valor monetário ausente é erro nomeado em vez de zero presumido. **Pendente:** a agregação do dashboard ainda converte Decimal para Number para exibição, o que perde precisão em somas grandes.
-6. **Preparação para deploy.** next.config.ts não ignora mais erros de TypeScript e não contém a opção removida no Next.js 16. O middleware foi migrado para a convenção proxy, que roda obrigatoriamente no runtime Node.js — isso também remove o risco de carregar o cliente Prisma no edge. Lint e checagem de tipos estão limpos. Permanecem: PostgreSQL gerenciado, migrations controladas na publicação e limite de pool adequado.
+| Hora | Etapa |
+|---|---|
+| 23:10:40 | compra fechada na loja |
+| 23:10:42 | o sebo emitiu o aviso e o webhook gravou o evento |
+| 23:11:2x | dispatcher publicou no QStash |
+| 23:11:25 | job consultou o pedido pelo gateway e sincronizou |
+| 23:11:26 | evento `PROCESSED` em 1 tentativa |
 
-## Fluxo implementado
+Dois segundos entre a compra e o aviso. Venda gravada com valores conferindo com o pedido de origem, histórico de status e auditoria com ator `INTEGRATION`.
 
-Marketplace → webhook Next.js → registro durável no PostgreSQL → QStash → endpoint de processamento → adapter da plataforma → API oficial → normalização → Sale + SaleItem + auditoria.
+Estão provados: emissão pelo sebo, recepção autenticada, resolução de conexão, fila durável, verificação de assinatura, busca pelo gateway, normalização e gravação.
 
-Recepção:
-- Valida formato, tamanho, tópico e aplicação, e autentica por segredo no caminho com comparação em tempo constante. Responde 404 em vez de 401 para não confirmar o endpoint.
-- Resolve a conexão pelo vendedor do aviso e persiste IntegrationEvent e a pendência de publicação em uma transação curta antes de confirmar o recebimento.
-- Não consulta pedido, não renova token e não executa regra de negócio. A documentação do ML pede HTTP 200 em até 500 ms; a latência real, incluindo partida a frio e conexão ao banco, **não foi medida**.
-- Tópico alheio, aplicação alheia e vendedor desconhecido são confirmados com 200 e descartados, para não gerar reenvio indefinido. Isso não deixa rastro do descarte.
-- A publicação no QStash fica a cargo do dispatcher agendado, que recupera o outbox pendente com lease e tentativas limitadas. Duplicação de publicação é esperada em falhas intermediárias e absorvida pela idempotência a jusante.
+## Defeitos que só o dado real revelou
 
-Processamento:
-- Verifica a assinatura do QStash com o corpo original e a URL esperada, e consome apenas o identificador do evento.
-- Carrega evento e conexão do banco, consulta o pedido com a credencial da loja em host conhecido, normaliza e só então abre a transação. A consulta ao provedor nunca mantém transação aberta.
-- O status do evento é reconferido dentro da transação, porque uma entrega concorrente pode ter concluído primeiro. Há idempotência de evento e de pedido, proteção contra versão antiga e histórico append-only com unicidade por evento.
-- Falha permanente encerra o evento como FAILED com motivo; falha transitória repete até o teto. 429 e 5xx do provedor são classificados como transitórios; 401 e 403 exigem reautorizar.
+Nenhum destes aparecia com a suíte verde. É o argumento mais concreto a favor de validar contra payload e ambiente reais antes de confiar numa integração.
 
-Ainda não implementado: autorização OAuth, renovação de token, estado de envio, conciliação periódica e Shopee.
+1. **Fração de segundo na data.** O validador aceitava até milissegundos, que é o que o Mercado Livre manda; o `isoformat()` do Python emite microssegundos. Todo pedido do sebo era recusado, com uma mensagem que nem apontava a causa.
+2. **Dois-pontos no id de deduplicação.** O QStash recusa com 400. A publicação **nunca** tinha funcionado; os testes passavam porque o publicador dublê não validava o formato. Hoje o dublê impõe a mesma regra do provedor.
+3. **`APP_URL` com `vercel.ap`.** Um caractere a menos fazia a verificação de assinatura recusar toda entrega com 401, com a fila parecendo configurada.
+4. **`QSTASH_URL` ausente.** Projeto QStash regional não é atendido pelo endpoint global, que responde 404. A variável estava documentada como opcional — não é.
+5. **Botão de autorizar em qualquer canal.** Como a conexão é única por `(provider, externalAccountId)` e o upsert reescreve o `marketplaceId`, autorizar o ML a partir da linha errada moveria a conexão, e os pedidos do ML passariam a entrar noutro canal sem erro visível.
+6. **Rotas de API sem proteção de sessão.** O matcher do proxy exclui `/api`, então authorize e callback devolviam 500 em vez de mandar ao login — e o callback descartaria o código de autorização.
 
-## O que falta para operar
+O que encurtou cada diagnóstico foi instrumentação, não tentativa: o status HTTP no erro de publicação, o destino assinado na resposta do dispatcher, e os nomes dos campos, o escopo pedido e o escopo concedido na auditoria da conexão. Vale manter.
 
-Provisionamento, fora do repositório:
-- APP_URL, QSTASH_TOKEN, as duas signing keys, CRON_SECRET, INTEGRATION_ENCRYPTION_KEY, MERCADO_LIVRE_WEBHOOK_SECRET e MERCADO_LIVRE_APP_ID. Sem as de mensageria, as rotas de job respondem 503. O template está em `.env.example`.
-- Schedule no QStash apontando para /api/jobs/dispatch-outbox e entregando o cabeçalho Authorization com o CRON_SECRET. O repositório não provisiona agendamento.
-- Aplicação de desenvolvedor no Mercado Livre e URL de callback com o segredo no caminho.
-- URL pública HTTPS: `messagingConfig()` recusa http e localhost, e o QStash precisa alcançar a aplicação. Exercitar a fila localmente exige túnel.
+## Limitações conhecidas
 
-Código, em ordem de risco:
-1. **Validar o mapeamento de valores contra um pedido real.** É a pendência de maior risco e está isolada em lib/integrations/mercadolivre/normalize.ts, com o contrato assumido declarado no topo do arquivo e coberto por fixture. Trocar a fixture por um pedido real da conta autorizada faz qualquer divergência aparecer como teste vermelho.
-2. OAuth do Mercado Livre e renovação de token com controle de concorrência. Enquanto não existe, a conexão é cadastrada por `npm run connection:register` e credencial expirada falha com mensagem explícita em vez de renovar.
-3. Estado de envio: SHIPPED e DELIVERED dependem do recurso de shipments, que o recurso de pedido não carrega. O mapeamento atual chega até PAID e CANCELLED.
-4. Conciliação periódica de pedidos alterados, para recuperar lacunas de notificação. O teto de tentativas limita repetição, mas não repesca aviso perdido.
-5. Interface para cadastrar e revogar conexões, hoje só por script.
-6. Shopee, depois de conferir permissões, credenciais e documentação acessível na conta. O resolver falha com erro nomeado para esse provedor.
-7. Catálogo, estoque e preços, com regras de origem e reconciliação próprias.
+- **O Mercado Livre não concede `offline_access` a esta aplicação.** Provado pela auditoria: escopo pedido `offline_access read write`, escopo concedido sem ele, resposta de token sem `refresh_token`. O portal também não oferece esse escopo na lista selecionável. Consequência: a credencial vale 6 horas e exige reautorizar na tela. O código trata isso com mensagem explícita e conexão marcada como expirada; a saída é do lado do ML (outra aplicação, usuário de teste ou suporte), não do código.
+- **Nenhum provedor chega a `SHIPPED` ou `DELIVERED`.** No ML isso depende do recurso de shipments, que o recurso de pedido não carrega; o sebo não tem o conceito. O mapeamento vai até `PAID`/`CANCELLED`.
+- **O sebo não tem frete, taxa nem desconto.** São zero declarado e documentado, diferente do zero presumido que o normalizador do ML proíbe.
+- **Janela residual de perda no sebo.** Se o processo morrer entre o commit do pedido e o commit do aviso, o pedido existe sem aviso e nada o repesca. Só a conciliação periódica fecha isso.
+
+## O que falta
+
+1. **Validar o normalizador do Mercado Livre contra um pedido real.** É a pendência de maior risco. A conta não tem vendas; o usuário de teste do ML permitiria criar uma. O mapeamento está isolado em `lib/integrations/mercadolivre/normalize.ts` e coberto por fixture — trocar a fixture por um pedido real faz qualquer divergência virar teste vermelho, como já aconteceu com o sebo.
+2. **Conciliação periódica** de pedidos alterados, para recuperar lacunas de notificação. Serve a ML e sebo ao mesmo tempo e fecha a janela residual acima.
+3. **Estado de envio**, integrando o recurso de shipments do ML.
+4. **Shopee**, depois de conferir permissões e documentação acessível na conta. O resolver falha com erro nomeado para esse provedor.
+5. **Precisão no dashboard**: a agregação ainda converte Decimal para Number na exibição, o que perde precisão em somas grandes. O caminho de pedidos usa Decimal de ponta a ponta.
+6. **Catálogo, estoque e preços**, com regras de origem próprias.
 
 ## Estrutura
 
 Implementado:
-- app/api/webhooks/mercadolivre/[secret]/route.ts — recepção, casca fina sobre lib.
-- app/api/jobs/marketplace-events/route.ts — processamento assinado.
-- app/api/jobs/dispatch-outbox/route.ts — publicação de pendências, autenticada por segredo de serviço.
-- lib/integrations/mercadolivre/{notification,client,normalize,webhook}.ts e lib/integrations/{crypto,resolve}.ts.
-- lib/messaging/ — publicação, validação de assinatura e limite de corpo.
-- lib/services/ — sales, integration-events, outbox, members, organizations, access, transactions.
-- MarketplaceConnection, IntegrationEvent, OutboxMessage e SaleStatusHistory no schema.
+- `app/api/webhooks/{mercadolivre,sebo}/[secret]/route.ts` — recepção, cascas finas sobre `lib`.
+- `app/api/integrations/mercadolivre/{authorize,callback}/route.ts` — autorização OAuth.
+- `app/api/jobs/{marketplace-events,dispatch-outbox}/route.ts` — processamento assinado e publicação.
+- `lib/integrations/` — `webhook.ts` comum, `crypto.ts`, `oauth-state.ts`, `resolve.ts`, e os adapters `mercadolivre/` e `sebo/`.
+- `lib/services/` — sales, integration-events, outbox, connections, members, organizations, access, transactions.
+- `lib/domain/` — order-input, sale-status, roles, marketplace-provider, audit-filter.
 
-A criar:
-- app/api/integrations/[provider]/... — autorização e callback, com state validado e vínculo seguro à organização.
-- lib/integrations/shopee/ — autenticação, cliente e normalização.
-- Job de conciliação e tela de conexões.
+A criar: `lib/integrations/shopee/`, job de conciliação, e a tela de conexões ganhar remoção/revogação.
 
-## Ordem de entrega e critérios
+## Configuração
 
-1. **Concluído.** Autorização corrigida e serviço de vendas extraído; testes cobrem rejeição entre organizações, Decimal e auditoria sem sessão.
-2. **Concluído em parte.** Conexões, eventos e outbox existem. O fluxo de autorização do Mercado Livre não.
-3. **Concluído em parte.** O pedido é consultado no recurso oficial e mapeado ao modelo atual; o mapeamento de valores não foi validado contra payload real.
-4. **Concluído.** QStash, dispatcher e reprocessamento ligados. Testes cobrem duplicação, publicação indisponível, falha antes e depois do commit, concorrência, credencial expirada, evento fora de ordem e esgotamento de tentativas.
-5. Pendente: Shopee.
-6. Pendente: PostgreSQL gerenciado e deploy; validar callback HTTPS, latência, limites de execução, volume e observabilidade.
-7. Pendente: catálogo, estoque e preços.
+Variáveis em `.env.example`. As que causaram falha silenciosa e merecem atenção:
 
-Critérios do primeiro ciclo, cobertos por teste: a venda entra uma única vez na organização correta; mudança de status não sofre regressão por evento antigo; falha é recuperável e visível; toda alteração automática tem origem rastreável na auditoria. O que nenhum teste cobre é o comportamento contra o provedor real.
+- `APP_URL` — https, sem caminho. É a base do destino assinado; divergência devolve 401 em toda entrega.
+- `QSTASH_URL` — obrigatória em projeto regional.
+- `DATABASE_URL` pooled (host com `-pooler` no Neon) e `DIRECT_DATABASE_URL` sem pooler, para `prisma migrate`. **Manter as duas sempre no mesmo ambiente:** com elas divergentes, um comando de migration mira produção enquanto a aplicação roda local.
+- `INTEGRATION_ENCRYPTION_KEY` — 32 bytes base64. Regerar torna ilegíveis os tokens já cifrados.
 
-## Custos e documentação
+O seed não roda no build: banco novo nasce sem organização e sem usuário, e ninguém consegue entrar até rodar `prisma db seed`.
 
-- [QStash](https://upstash.com/pricing/qstash): gratuito com 1.000 entregas/dia e mensagem até 1 MB. Cada tentativa conta, inclusive retry, e o schedule do dispatcher também consome cota. Uma venda pode gerar vários eventos. O plano por uso publica US$ 1 por 100 mil mensagens, com condições adicionais de banda. Custo total não estimado sem volume.
-- [CloudAMQP](https://www.cloudamqp.com/plans.html): Little Lemur gratuito, apresentado para desenvolvimento, com 1 milhão de mensagens/mês, 100 filas, 10 mil mensagens enfileiradas e 20 conexões. Não é promessa de disponibilidade para produção.
-- [SQS](https://aws.amazon.com/sqs/pricing/): 1 milhão de requests/mês gratuitos; enviar, receber e remover são ações distintas. Não equivale a 1 milhão de pedidos completos.
-- [Notificações ML](https://developers.mercadolivre.com.br/produto-receba-notificacoes): orders_v2 e confirmação HTTP 200 em até 500 ms.
-- [QStash: introdução](https://upstash.com/docs/qstash/overall/getstarted) e [assinaturas](https://upstash.com/docs/qstash/howto/signature).
-- [Shopee Open Platform](https://open.shopee.com/documents): a consulta automática retornou HTTP 403. Requisitos de elegibilidade, autorização e assinatura não foram confirmados; não assumir equivalência com o ML.
-- Nesta atualização, as páginas do portal de desenvolvedores do Mercado Livre também responderam HTTP 403 à consulta automatizada. O contrato de campos do pedido não foi reconfirmado, e é por isso que o mapeamento de valores está declarado como intenção a validar.
+## Custos
 
-O gratuito da fila não cobre hospedagem, banco, tráfego e execução. Permanecem a dimensionar: lojas conectadas, eventos por dia, histórico a importar, provedor do banco e disponibilidade das credenciais de desenvolvedor.
+- [QStash](https://upstash.com/pricing/qstash): gratuito com 1.000 entregas/dia. Cada tentativa conta, inclusive retry, e o schedule a cada 5 minutos consome 288 por dia. Entrega recusada por assinatura inválida ainda gera as retentativas configuradas — foi assim que uma configuração errada queimou dezenas de entregas num diagnóstico.
+- [SQS](https://aws.amazon.com/sqs/pricing/) e [CloudAMQP](https://www.cloudamqp.com/plans.html) seguem como alternativas se a infraestrutura migrar.
+- O gratuito da fila não cobre hospedagem, banco, tráfego e execução.
 
 ## Limites do que foi verificado
 
-- Nenhuma chamada real ao Mercado Livre ou ao QStash. Os testes usam dublês para o provedor e para a publicação.
-- Não houve medição de latência do webhook, teste de carga, deploy, nem exploração de segurança.
-- O mapeamento de valores e o mapeamento de status do Mercado Livre são intenção declarada, não contrato confirmado.
-- O repositório tem alterações não commitadas.
-
-Referências locais: prisma/schema.prisma; lib/services/; lib/integrations/; lib/messaging/; app/api/webhooks/; app/api/jobs/; .env.example; tests/.
-Guias lidos: node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/route.md, .../proxy.md e trechos de 01-app/02-guides/upgrading/version-16.md.
+- O Sebo On-Line foi validado com pedido real em produção. **O Mercado Livre não**: nenhuma venda passou por ele, e o mapeamento de valores é intenção declarada.
+- O portal de desenvolvedores do Mercado Livre responde 403 a consulta automatizada. Os endpoints de autorização e token foram confirmados na prática — a autorização fecha e a conexão é gravada — mas continuam configuráveis por variável.
+- Não houve medição de latência do webhook, teste de carga nem exploração de segurança.
+- A renovação de token do ML nunca rodou de verdade, porque o provedor não emite refresh token para esta aplicação. O caminho está coberto por teste com dublê, incluindo a corrida do compare-and-swap.
