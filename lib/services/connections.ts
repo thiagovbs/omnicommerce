@@ -13,6 +13,8 @@ export interface ProviderTokens {
   expiresAt: Date | null;
   /// Nomes dos campos devolvidos pelo provedor, para diagnóstico. Nunca valores.
   campos?: string[];
+  /// Permissões concedidas, como o provedor as reporta. Não é credencial.
+  escopoConcedido?: string | null;
 }
 
 // Grava a loja autorizada. A organização vem da sessão e o marketplace é
@@ -77,6 +79,7 @@ export async function saveProviderConnection(db: PrismaClient, actor: UserActor,
         provider: input.provider, externalAccountId, marketplaceId,
         expiresAt: credenciais.expiresAt, renovavel: credenciais.refreshToken !== null,
         camposDoProvedor: input.tokens.campos ?? [],
+        escopoConcedido: input.tokens.escopoConcedido ?? null,
       },
     } });
     return { id: connection.id, marketplace: marketplace.name };

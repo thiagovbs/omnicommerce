@@ -81,6 +81,10 @@ export interface TokenSet {
   /// distinguir "o provedor não mandou refresh_token" de "o código o descartou",
   /// sem precisar espiar a resposta.
   campos: string[];
+  /// Permissões concedidas, como o provedor as reporta. É lista de permissão,
+  /// não credencial: sem offline_access ele não emite refresh token, e este é o
+  /// único jeito de saber o que a aplicação realmente concedeu.
+  escopoConcedido: string | null;
 }
 
 function leiaTokenSet(corpo: unknown): TokenSet {
@@ -102,6 +106,7 @@ function leiaTokenSet(corpo: unknown): TokenSet {
     expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000) : null,
     externalAccountId,
     campos: Object.keys(dados).sort(),
+    escopoConcedido: typeof dados.scope === "string" ? dados.scope : null,
   };
 }
 
