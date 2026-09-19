@@ -12,6 +12,7 @@ import {
 import { applyIntegratedOrder } from "../lib/services/sales";
 import { parseIntegratedOrder } from "../lib/domain/order-input";
 import { serializable } from "../lib/services/transactions";
+import { getProductStats } from "../app/(protected)/dashboard/product-stats";
 
 const db = new PrismaClient();
 
@@ -363,4 +364,155 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
       assert.equal(alvo.listings[0].marketplace.code, "sebo");
     });
   } finally { await db.$disconnect(); }
+});
+
+test("movimentos de estoque e números do painel em PostgreSQL", async (t) => {
+  const db2 = new PrismaClient();
+  try {
+    const org = await db2.organization.create({ data: { name: "Painel" } });
+    const admin = await db2.user.create({ data: {
+      organizationId: org.id, email: `admin-painel-${Date.now()}@local.test`,
+      name: "Admin", passwordHash: "x", role: "ADMIN",
+    } });
+    const ator = { userId: admin.id, organizationId: org.id };
+    const canal = await db2.marketplace.create({
+      data: { organizationId: org.id, code: "sebo", name: "Sebo do painel" },
+    });
+
+    const produto = await createProduct(db2, ator, {
+      sku: "PAINEL-001", title: "Produto do painel", price: "10.00", stock: 20,
+    });
+
+    await t.test("criar o produto já é um movimento", async () => {
+      const ms = await db2.stockMovement.findMany({ where: { productId: produto.id } });
+      assert.equal(ms.length, 1);
+      assert.equal(ms[0].reason, "CREATION");
+      assert.equal(ms[0].delta, 20);
+      assert.equal(ms[0].balance, 20);
+    });
+
+    await t.test("ajuste manual registra delta e saldo", async () => {
+      await setProductStock(db2, ator, produto.id, 15);
+      const m = await db2.stockMovement.findFirstOrThrow({
+        where: { productId: produto.id }, orderBy: { createdAt: "desc" },
+      });
+      assert.equal(m.reason, "MANUAL");
+      assert.equal(m.delta, -5);
+      assert.equal(m.balance, 15);
+    });
+
+    await t.test("ajuste sem mudança não cria movimento", async () => {
+      const antes = await db2.stockMovement.count({ where: { productId: produto.id } });
+      await setProductStock(db2, ator, produto.id, 15);
+      assert.equal(await db2.stockMovement.count({ where: { productId: produto.id } }), antes);
+    });
+
+    await t.test("venda registra o movimento apontando para a venda", async () => {
+      const evento = await db2.integrationEvent.create({ data: {
+        marketplaceId: canal.id, externalEventId: `painel-venda-${Date.now()}`,
+        externalOrderId: "painel-1", payload: {},
+      } });
+      await serializable(db2, async (tx) => applyIntegratedOrder(tx, {
+        marketplaceId: canal.id, organizationId: org.id,
+        eventId: evento.id, externalEventId: evento.externalEventId,
+      }, parseIntegratedOrder({
+        externalOrderId: "painel-1", status: "PAID", externalStatus: "PAID",
+        externalUpdatedAt: "2026-09-19T10:00:00Z", soldAt: "2026-09-19",
+        currency: "BRL", gross: "30.00", shipping: "0.00", discount: "0.00", fees: "0.00",
+        items: [{ title: "Produto do painel", sku: "PAINEL-001", quantity: 3, unitPrice: "10.00" }],
+      })));
+
+      const m = await db2.stockMovement.findFirstOrThrow({
+        where: { productId: produto.id }, orderBy: { createdAt: "desc" },
+      });
+      assert.equal(m.reason, "SALE");
+      assert.equal(m.delta, -3);
+      assert.equal(m.balance, 12);
+      const venda = await db2.sale.findFirstOrThrow({ where: { externalOrderId: "painel-1" } });
+      assert.equal(m.saleId, venda.id, "o movimento diz de qual venda veio");
+    });
+
+    await t.test("o saldo de cada movimento acompanha o estoque do produto", async () => {
+      const atual = await db2.product.findUniqueOrThrow({ where: { id: produto.id } });
+      const ultimo = await db2.stockMovement.findFirstOrThrow({
+        where: { productId: produto.id }, orderBy: { createdAt: "desc" },
+      });
+      assert.equal(ultimo.balance, atual.stock);
+
+      // A soma dos deltas reconstrói o saldo: é disso que o gráfico vive.
+      const todos = await db2.stockMovement.findMany({ where: { productId: produto.id } });
+      assert.equal(todos.reduce((s, m) => s + m.delta, 0), atual.stock);
+    });
+
+    await t.test("o painel soma unidades e valor em Decimal", async () => {
+      await createProduct(db2, ator, { sku: "PAINEL-002", title: "Outro", price: "0.07", stock: 3 });
+      const stats = await getProductStats(db2, org.id);
+      assert.equal(stats.total, 2);
+      assert.equal(stats.unidades, 12 + 3);
+      // 12 x 10,00 + 3 x 0,07 = 120,21. Em ponto flutuante daria 120.20999...
+      assert.equal(stats.valorEstoque, "120.21");
+    });
+
+    await t.test("a série de estoque termina no saldo de hoje e tem 30 dias", async () => {
+      const stats = await getProductStats(db2, org.id);
+      assert.equal(stats.estoquePorDia.length, 30);
+      assert.equal(stats.estoquePorDia[29].unidades, stats.unidades);
+      // Antes de qualquer movimento o catálogo estava vazio.
+      assert.equal(stats.estoquePorDia[0].unidades, 0);
+    });
+
+    await t.test("a série volta no tempo aplicando os deltas ao contrário", async () => {
+      const ontem = new Date();
+      ontem.setUTCDate(ontem.getUTCDate() - 1);
+      const p = await db2.product.findFirstOrThrow({ where: { sku: "PAINEL-002" } });
+      await db2.stockMovement.create({ data: {
+        productId: p.id, organizationId: org.id, delta: -2, balance: 1,
+        reason: "SALE", createdAt: ontem,
+      } });
+      const stats = await getProductStats(db2, org.id);
+      // Todo o catálogo deste teste nasceu hoje, então ontem fechou em zero:
+      // a série desfaz os movimentos de hoje ao voltar um dia.
+      assert.equal(stats.estoquePorDia[29].unidades, stats.unidades);
+      assert.equal(stats.estoquePorDia[28].unidades, 0);
+      // E desfazer a baixa de ontem soma as 2 unidades de volta no dia anterior.
+      assert.equal(stats.estoquePorDia[27].unidades, 2);
+    });
+
+    await t.test("o ranking ignora venda cancelada", async () => {
+      const antes = await getProductStats(db2, org.id);
+      assert.equal(antes.maisVendidos.find((m) => m.titulo === "Produto do painel")?.unidades, 3);
+
+      const evento = await db2.integrationEvent.create({ data: {
+        marketplaceId: canal.id, externalEventId: `painel-cancel-${Date.now()}`,
+        externalOrderId: "painel-1", payload: {},
+      } });
+      await serializable(db2, async (tx) => applyIntegratedOrder(tx, {
+        marketplaceId: canal.id, organizationId: org.id,
+        eventId: evento.id, externalEventId: evento.externalEventId,
+      }, parseIntegratedOrder({
+        externalOrderId: "painel-1", status: "CANCELLED", externalStatus: "CANCELLED",
+        externalUpdatedAt: "2026-09-19T12:00:00Z", soldAt: "2026-09-19",
+        currency: "BRL", gross: "30.00", shipping: "0.00", discount: "0.00", fees: "0.00",
+        items: [{ title: "Produto do painel", sku: "PAINEL-001", quantity: 3, unitPrice: "10.00" }],
+      })));
+
+      const depois = await getProductStats(db2, org.id);
+      assert.equal(depois.maisVendidos.find((m) => m.titulo === "Produto do painel"), undefined);
+      // E o cancelamento devolveu o estoque, com movimento próprio.
+      const m = await db2.stockMovement.findFirstOrThrow({
+        where: { productId: produto.id }, orderBy: { createdAt: "desc" },
+      });
+      assert.equal(m.reason, "CANCELLATION");
+      assert.equal(m.delta, 3);
+    });
+
+    await t.test("o painel não enxerga catálogo de outra organização", async () => {
+      const outra = await db2.organization.create({ data: { name: "Outra do painel" } });
+      const stats = await getProductStats(db2, outra.id);
+      assert.equal(stats.total, 0);
+      assert.equal(stats.unidades, 0);
+      assert.equal(stats.valorEstoque, "0.00");
+      assert.equal(stats.maisVendidos.length, 0);
+    });
+  } finally { await db2.$disconnect(); }
 });

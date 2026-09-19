@@ -18,10 +18,16 @@ export default async function SalesPage() {
   const [allSales, marketplaces] = await Promise.all([
     prisma.sale.findMany({
       where: { organizationId },
-      include: { marketplace: true, statusHistory: {
-        orderBy: { version: "desc" }, take: 10,
-        include: { changedBy: { select: { name: true } } },
-      } },
+      include: {
+        marketplace: true,
+        // Os itens já estão gravados; sem eles a listagem não relaciona a
+        // venda ao que foi vendido, que é o que se procura ao abrir a tela.
+        items: { select: { id: true, title: true, quantity: true, sku: true, unitPrice: true } },
+        statusHistory: {
+          orderBy: { version: "desc" }, take: 10,
+          include: { changedBy: { select: { name: true } } },
+        },
+      },
       orderBy: { soldAt: "desc" }
     }),
     prisma.marketplace.findMany({ 
@@ -53,6 +59,7 @@ export default async function SalesPage() {
               <th className="px-6 py-4 text-sm font-semibold">Data</th>
               <th className="px-6 py-4 text-sm font-semibold">Marketplace</th>
               <th className="px-6 py-4 text-sm font-semibold">Pedido</th>
+              <th className="px-6 py-4 text-sm font-semibold">Produtos</th>
               <th className="px-6 py-4 text-sm font-semibold text-right">Líquido (Net)</th>
               <th className="px-6 py-4 text-sm font-semibold">Status</th>
             </tr>
@@ -81,6 +88,25 @@ export default async function SalesPage() {
                       {sale.statusHistory.length === 10 && <p>Exibindo os 10 registros mais recentes.</p>}
                     </details>
                   </td>
+                  <td className="px-6 py-4 text-sm">
+                    {sale.items.length ? (
+                      <ul className="space-y-1">
+                        {sale.items.map((item) => (
+                          <li key={item.id} className="flex items-baseline gap-2">
+                            <span className="inline-flex shrink-0 items-center rounded bg-gray-100 px-1.5 py-0.5 text-xs font-semibold text-gray-700">
+                              {item.quantity}×
+                            </span>
+                            <span className="text-gray-900">{item.title}</span>
+                            {item.sku && (
+                              <span className="font-mono text-xs text-gray-400">{item.sku}</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
                   <td className="px-6 py-4 text-sm text-right font-bold text-green-700">
                     R$ {Number(sale.net).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                   </td>
@@ -95,7 +121,7 @@ export default async function SalesPage() {
               ))
             ) : (
               <tr>
-                <td colSpan={5} className="px-6 py-10 text-center text-gray-500">
+                <td colSpan={6} className="px-6 py-10 text-center text-gray-500">
                   Nenhuma venda encontrada para esta organização.
                 </td>
               </tr>

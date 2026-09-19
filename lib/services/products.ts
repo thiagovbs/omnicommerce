@@ -1,5 +1,5 @@
 import "server-only";
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient, StockMovementReason } from "@prisma/client";
 import { OrderError, textInput } from "../domain/order-input";
 import { inteiroNaoNegativo, parseProduct } from "../domain/product-input";
 import { assertOrgAdmin } from "./access";
@@ -21,6 +21,19 @@ import { serializable } from "./transactions";
 const CAMPOS_PUBLICADOS = [
   "title", "description", "price", "stock", "imageUrl", "brand", "condition", "category", "active",
 ] as const;
+
+/// Registra a mudança de estoque junto com o saldo que ficou.
+///
+/// Sempre na mesma transação de quem mudou o estoque: um movimento que não
+/// fosse gravado junto tornaria o histórico mentira, e o histórico é o que
+/// reconstrói o saldo de cada dia no painel.
+async function registrarMovimento(tx: Prisma.TransactionClient, dados: {
+  productId: string; organizationId: string; delta: number; balance: number;
+  reason: StockMovementReason; saleId?: string;
+}) {
+  if (!dados.delta) return;
+  await tx.stockMovement.create({ data: dados });
+}
 
 /// Liga a marca de pendência nos anúncios do produto e os torna elegíveis já.
 /// `attempts` volta a zero porque a mudança é um fato novo: o backoff herdado
@@ -45,6 +58,10 @@ export async function createProduct(db: PrismaClient, actor: UserActor, input: u
     const product = await tx.product.create({
       data: { ...dados, organizationId: actor.organizationId },
       select: { id: true, sku: true, title: true },
+    });
+    await registrarMovimento(tx, {
+      productId: product.id, organizationId: actor.organizationId,
+      delta: dados.stock, balance: dados.stock, reason: "CREATION",
     });
     await tx.auditLog.create({ data: {
       action: "CREATE", entity: "PRODUCT", entityId: product.id,
@@ -78,6 +95,13 @@ export async function updateProduct(db: PrismaClient, actor: UserActor, productI
       where: { id }, data: dados, select: { id: true, sku: true, title: true },
     });
 
+    if (dados.stock !== atual.stock) {
+      await registrarMovimento(tx, {
+        productId: id, organizationId: actor.organizationId,
+        delta: dados.stock - atual.stock, balance: dados.stock, reason: "PRODUCT_EDIT",
+      });
+    }
+
     const mudouPublicado = CAMPOS_PUBLICADOS.some((campo) => campo === "price"
       ? !atual.price.equals(dados.price)
       : atual[campo] !== dados[campo]);
@@ -109,6 +133,10 @@ export async function setProductStock(db: PrismaClient, actor: UserActor, produc
     if (atual.stock === novo) return { id, sku: atual.sku, stock: novo, anunciosPendentes: 0 };
 
     await tx.product.update({ where: { id }, data: { stock: novo } });
+    await registrarMovimento(tx, {
+      productId: id, organizationId: actor.organizationId,
+      delta: novo - atual.stock, balance: novo, reason: "MANUAL",
+    });
     const pendentes = (await marcarAnunciosPendentes(tx, id)).count;
     await tx.auditLog.create({ data: {
       action: "UPDATE", entity: "PRODUCT", entityId: id,
@@ -133,7 +161,7 @@ export async function setProductStock(db: PrismaClient, actor: UserActor, produc
  */
 async function moverEstoque(tx: Prisma.TransactionClient, organizationId: string, itens: {
   sku: string | null; quantity: number;
-}[], sinal: 1 | -1) {
+}[], sinal: 1 | -1, saleId?: string) {
   const porSku = new Map<string, number>();
   for (const item of itens) {
     const chave = (item.sku ?? "").trim().toUpperCase();
@@ -154,6 +182,10 @@ async function moverEstoque(tx: Prisma.TransactionClient, organizationId: string
     const novo = Math.max(0, produto.stock + sinal * quantidade);
     if (novo === produto.stock) continue;
     await tx.product.update({ where: { id: produto.id }, data: { stock: novo } });
+    await registrarMovimento(tx, {
+      productId: produto.id, organizationId, delta: novo - produto.stock, balance: novo,
+      reason: sinal < 0 ? "SALE" : "CANCELLATION", saleId,
+    });
     anunciosPendentes += (await marcarAnunciosPendentes(tx, produto.id)).count;
     movidos++;
   }
@@ -164,16 +196,16 @@ async function moverEstoque(tx: Prisma.TransactionClient, organizationId: string
 /// mesmo pedido não pode debitar duas vezes.
 export function baixarEstoquePorVenda(tx: Prisma.TransactionClient, organizationId: string, itens: {
   sku: string | null; quantity: number;
-}[]) {
-  return moverEstoque(tx, organizationId, itens, -1);
+}[], saleId: string) {
+  return moverEstoque(tx, organizationId, itens, -1, saleId);
 }
 
 /// Venda cancelada: devolve ao estoque. Sem isto, todo cancelamento tiraria o
 /// item das vitrines para sempre.
 export function devolverEstoquePorCancelamento(tx: Prisma.TransactionClient, organizationId: string, itens: {
   sku: string | null; quantity: number;
-}[]) {
-  return moverEstoque(tx, organizationId, itens, 1);
+}[], saleId: string) {
+  return moverEstoque(tx, organizationId, itens, 1, saleId);
 }
 
 export async function listProducts(db: PrismaClient, actor: UserActor) {

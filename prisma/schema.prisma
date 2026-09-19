@@ -67,6 +67,16 @@ enum OutboxStatus {
   FAILED
 }
 
+/// Por que o estoque mudou. Sem isso, uma baixa por venda seria
+/// indistinguível de um ajuste manual no histórico.
+enum StockMovementReason {
+  CREATION
+  MANUAL
+  PRODUCT_EDIT
+  SALE
+  CANCELLATION
+}
+
 /// Estado de um anúncio num canal. PUBLISHING existe para separar "pedimos
 /// para publicar" de "o provedor confirmou": sem isso, uma falha no meio
 /// deixaria o anúncio parecendo rascunho e ele seria publicado duas vezes.
@@ -340,8 +350,9 @@ model Product {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   listings     Listing[]
+  movements    StockMovement[]
 
   @@unique([organizationId, sku])
   @@index([organizationId])
@@ -386,4 +397,33 @@ model Listing {
   @@unique([productId, marketplaceId])
   @@index([marketplaceId])
   @@index([needsSync, availableAt])
+}
+
+/// Cada mudança de estoque, com o saldo que ficou depois dela.
+///
+/// Guardar o `balance` junto do `delta` evita reconstruir o saldo somando a
+/// série inteira toda vez que alguém abre o painel, e deixa o registro legível
+/// sozinho: a linha diz o que aconteceu e onde parou.
+///
+/// Gravado na mesma transação da mudança. Antes disto, uma venda baixava o
+/// estoque sem deixar rastro em lugar nenhum -- nem na auditoria.
+model StockMovement {
+  id             String              @id @default(cuid())
+  productId      String
+  /// Repetida aqui de propósito: o painel filtra por organização e período, e
+  /// sem a coluna todo gráfico exigiria juntar com Product.
+  organizationId String
+  /// Negativo é saída. A soma dos deltas posteriores a um dia reconstrói
+  /// exatamente o saldo daquele dia a partir do saldo de hoje.
+  delta          Int
+  balance        Int
+  reason         StockMovementReason
+  /// Presente quando o movimento veio de uma venda.
+  saleId         String?
+  createdAt      DateTime            @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([productId, createdAt])
 }

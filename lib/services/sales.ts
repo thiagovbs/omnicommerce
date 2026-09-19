@@ -87,9 +87,9 @@ export async function applyIntegratedOrder(tx: Prisma.TransactionClient, context
   // cancelada. Atualização de uma venda já conhecida não mexe, senão cada
   // reenvio do mesmo pedido debitaria de novo.
   if (!existing && order.status !== "CANCELLED") {
-    await baixarEstoquePorVenda(tx, context.organizationId, items);
+    await baixarEstoquePorVenda(tx, context.organizationId, items, sale.id);
   } else if (existing && existing.status !== "CANCELLED" && order.status === "CANCELLED") {
-    await devolverEstoquePorCancelamento(tx, context.organizationId, items);
+    await devolverEstoquePorCancelamento(tx, context.organizationId, items, sale.id);
   }
   if (statusChanged) await tx.saleStatusHistory.create({ data: {
     saleId: sale.id, fromStatus: existing?.status, toStatus: order.status, source: "INTEGRATION", version,
