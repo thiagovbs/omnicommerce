@@ -269,6 +269,11 @@ model MarketplaceConnection {
   /// Access token expiry as reported by the provider.
   expiresAt         DateTime?
   lastSyncedAt      DateTime?
+  /// Até quando a conciliação já varreu este provedor. Separado de
+  /// `lastSyncedAt`, que avança com qualquer aviso entregue: se a janela
+  /// dependesse dele, um aviso recente empurraria o ponto de partida para
+  /// frente e o pedido cujo aviso se perdeu ficaria fora para sempre.
+  lastReconciledAt  DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 

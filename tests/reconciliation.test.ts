@@ -30,24 +30,43 @@ test("conciliação periódica em PostgreSQL", async (t) => {
       data: { marketplaceId: canal.id, provider: "SEBO_ONLINE", externalAccountId: "loja-1" },
     });
 
-    await t.test("janela cai no padrão sem sincronização e usa a última com folga", () => {
+    await t.test("janela cai no padrão sem conciliação e usa a última com folga", () => {
       const agora = new Date("2026-09-19T12:00:00Z");
-      const semSync = janelaDe({ ...conexao, lastSyncedAt: null }, agora);
-      assert.equal(agora.getTime() - semSync.getTime(), JANELA_PADRAO_MS);
+      const semMarca = janelaDe({ ...conexao, lastReconciledAt: null }, agora);
+      assert.equal(agora.getTime() - semMarca.getTime(), JANELA_PADRAO_MS);
 
-      const sincronizada = new Date("2026-09-19T11:00:00Z");
-      const comSync = janelaDe({ ...conexao, lastSyncedAt: sincronizada }, agora);
-      // Volta antes da última sincronização, para não perder o que mudou
+      const conciliada = new Date("2026-09-19T11:00:00Z");
+      const comMarca = janelaDe({ ...conexao, lastReconciledAt: conciliada }, agora);
+      // Volta antes da última conciliação, para não perder o que mudou
       // enquanto a rodada anterior corria.
-      assert(comSync < sincronizada);
+      assert(comMarca < conciliada);
+    });
+
+    await t.test("aviso entregue agora não encolhe a janela da conciliação", () => {
+      // Regressão: com a janela saindo de `lastSyncedAt`, um aviso entregue
+      // às 11h faria a rodada olhar só a partir das 10h, e o pedido das 09h
+      // cujo aviso se perdeu nunca mais seria repescado.
+      const agora = new Date("2026-09-19T12:00:00Z");
+      const janela = janelaDe({
+        ...conexao,
+        lastReconciledAt: new Date("2026-09-19T08:00:00Z"),
+        lastSyncedAt: new Date("2026-09-19T11:00:00Z"),
+      }, agora);
+      assert(janela < new Date("2026-09-19T09:00:00Z"));
     });
 
     await t.test("pedido que nunca chegou é enfileirado e vira venda", async () => {
       const alterado = new Date("2026-09-19T10:00:00Z");
       const listar: ListarAlterados = async () => [{ externalOrderId: "perdido-1", updatedAt: alterado }];
 
+      const antes = new Date();
       const resultado = await reconcileConnection(db, conexao, listar);
       assert.deepEqual(resultado, { verificados: 1, enfileirados: 1, emDia: 0 });
+
+      // A marca avança só depois de enfileirar, e não passa do início da rodada.
+      const marcada = await db.marketplaceConnection.findUniqueOrThrow({ where: { id: conexao.id } });
+      assert(marcada.lastReconciledAt !== null);
+      assert(marcada.lastReconciledAt >= antes);
 
       const evento = await db.integrationEvent.findFirstOrThrow({
         where: { externalOrderId: "perdido-1" }, include: { outbox: true },
@@ -89,6 +108,22 @@ test("conciliação periódica em PostgreSQL", async (t) => {
       await reconcileConnection(db, conexao, listar);
       await reconcileConnection(db, conexao, listar);
       assert.equal(await db.integrationEvent.count({ where: { externalOrderId: "repetido" } }), 1);
+    });
+
+    await t.test("falha ao listar deixa a marca onde estava", async () => {
+      const marcaAnterior = (await db.marketplaceConnection.findUniqueOrThrow({
+        where: { id: conexao.id },
+      })).lastReconciledAt;
+
+      await assert.rejects(
+        reconcileConnection(db, conexao, async () => { throw new OrderError("provedor fora do ar"); }),
+      );
+
+      const depois = (await db.marketplaceConnection.findUniqueOrThrow({
+        where: { id: conexao.id },
+      })).lastReconciledAt;
+      // Senão a janela pularia adiante sem ter varrido nada.
+      assert.deepEqual(depois, marcaAnterior);
     });
 
     await t.test("uma conexão com problema não impede as outras", async () => {

@@ -31,10 +31,12 @@ export type ListarAlterados = (
 ) => Promise<PedidoAlterado[]>;
 
 export function janelaDe(connection: MarketplaceConnection, agora = new Date()) {
-  // Com sincronização anterior, olha dali para trás com folga; sem ela, cai na
-  // janela padrão em vez de varrer o histórico inteiro do provedor.
-  const base = connection.lastSyncedAt
-    ? connection.lastSyncedAt.getTime() - SOBREPOSICAO_MS
+  // A marca é a da própria conciliação, e não `lastSyncedAt`: aquele avança a
+  // cada aviso entregue, então um pedido recente empurraria o começo da janela
+  // para frente e o pedido mais antigo cujo aviso se perdeu — justamente o que
+  // esta rotina existe para repescar — nunca mais seria olhado.
+  const base = connection.lastReconciledAt
+    ? connection.lastReconciledAt.getTime() - SOBREPOSICAO_MS
     : agora.getTime() - JANELA_PADRAO_MS;
   return new Date(Math.min(base, agora.getTime()));
 }
@@ -42,7 +44,10 @@ export function janelaDe(connection: MarketplaceConnection, agora = new Date()) 
 export async function reconcileConnection(
   db: PrismaClient, connection: MarketplaceConnection, listar: ListarAlterados,
 ) {
-  const desde = janelaDe(connection);
+  // Carimbado antes de perguntar ao provedor: o que mudar enquanto a rodada
+  // corre cai na sobreposição da próxima, em vez de escapar entre as duas.
+  const inicio = new Date();
+  const desde = janelaDe(connection, inicio);
   const alterados = await listar(connection, desde);
 
   let enfileirados = 0;
@@ -78,13 +83,19 @@ export async function reconcileConnection(
     });
     enfileirados++;
   }
+  // Só depois de tudo enfileirado. Uma falha no meio deixa a marca onde estava,
+  // e a rodada seguinte cobre a mesma janela.
+  await db.marketplaceConnection.update({
+    where: { id: connection.id }, data: { lastReconciledAt: inicio },
+  });
   return { verificados: alterados.length, enfileirados, emDia };
 }
 
 export async function reconcileAll(db: PrismaClient, listar: ListarAlterados, limite = 20) {
   const connections = await db.marketplaceConnection.findMany({
     where: { status: "ACTIVE", marketplace: { active: true } },
-    orderBy: { lastSyncedAt: { sort: "asc", nulls: "first" } },
+    // Quem está há mais tempo sem conciliar passa na frente do limite.
+    orderBy: { lastReconciledAt: { sort: "asc", nulls: "first" } },
     take: limite,
   });
 

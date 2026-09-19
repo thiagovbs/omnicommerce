@@ -9,13 +9,13 @@ Aplicação publicada em `https://omnicommerce.vercel.app` (Vercel), banco no Ne
 
 - **Fila:** QStash para entrega HTTP, mantendo Next.js, Prisma e PostgreSQL. RabbitMQ foi descartado por exigir broker gerenciado e consumidor contínuo hospedado.
 - **Estágio do payload:** `IntegrationEvent.payload` guarda a notificação crua; consultar o pedido e normalizar acontece no job. Um salto de fila por notificação.
-- **Agendador:** schedules do próprio QStash, para não amarrar a hospedagem. `omnicommerce-dispatch-outbox` a cada 5 minutos publica o outbox; a conciliação roda espaçada (de hora em hora basta), porque é rede de segurança, não via principal.
+- **Agendador:** schedules do próprio QStash, para não amarrar a hospedagem. `omnicommerce-dispatch-outbox` a cada 5 minutos publica o outbox; `omnicommerce-reconcile` roda de hora em hora, no minuto 17 para não bater com os ticks do dispatcher, porque a conciliação é rede de segurança e não via principal. Ambos estão registrados e repassam o `CRON_SECRET` no `Authorization`, sem retentativa: a rodada seguinte recupera.
 - **Loja própria pelo mesmo caminho dos marketplaces:** o Sebo entra como provedor `SEBO_ONLINE` e reaproveita todo o pipeline. Um modelo mental só.
 - **Migrations na publicação:** Build Command `npm run build:vercel`. O `build` normal não toca o banco, senão o estágio builder do Dockerfile quebraria.
 
 ## O que existe
 
-Verificado por leitura do código e por **80 testes automatizados**. `npm run test:orders` sobe PostgreSQL 16 em contêiner efêmero, aplica as 8 migrations, aborta se houver divergência entre schema e migrations, e roda as suítes. Nenhum teste toca a rede: provedores e publicação são dublês.
+Verificado por leitura do código e por **90 testes automatizados**. `npm run test:orders` sobe PostgreSQL 16 em contêiner efêmero, aplica as 9 migrations, aborta se houver divergência entre schema e migrations, e roda as suítes. Nenhum teste toca a rede: provedores e publicação são dublês.
 
 Base e autorização:
 - Next.js 16.2.6, React 19.2.4, Prisma 6, NextAuth 5 beta.
@@ -64,6 +64,7 @@ O que encurtou cada diagnóstico foi instrumentação, não tentativa: o status 
 - **O Mercado Livre não concede `offline_access` a esta aplicação.** Provado pela auditoria: escopo pedido `offline_access read write`, escopo concedido sem ele, resposta de token sem `refresh_token`. O portal também não oferece esse escopo na lista selecionável. Consequência: a credencial vale 6 horas e exige reautorizar na tela. O código trata isso com mensagem explícita e conexão marcada como expirada; a saída é do lado do ML (outra aplicação, usuário de teste ou suporte), não do código.
 - **Nenhum provedor chega a `SHIPPED` ou `DELIVERED`.** No ML isso depende do recurso de shipments, que o recurso de pedido não carrega; o sebo não tem o conceito. O mapeamento vai até `PAID`/`CANCELLED`.
 - **O sebo não tem frete, taxa nem desconto.** São zero declarado e documentado, diferente do zero presumido que o normalizador do ML proíbe.
+- **A janela da conciliação tem marca própria (`lastReconciledAt`).** Não sai de `lastSyncedAt`, que avança a cada aviso entregue: se saísse, um aviso recente empurraria o começo da janela para frente e o pedido mais antigo cujo aviso se perdeu — exatamente o caso que a rotina existe para repescar — ficaria fora para sempre. A marca só avança quando a rodada termina inteira, e é carimbada com o instante em que a rodada começou.
 - **Conciliação implementada só para o Sebo.** O job pergunta ao provedor o que mudou e enfileira o que falta, fechando a janela entre gravar o pedido e gravar o aviso. Para o Mercado Livre ela falha com erro nomeado: os parâmetros de busca por data não foram confirmados na documentação e não há pedido para exercitar.
 
 ## O que falta
@@ -84,7 +85,7 @@ Implementado:
 - `lib/services/` — sales, integration-events, outbox, connections, members, organizations, access, transactions.
 - `lib/domain/` — order-input, sale-status, roles, marketplace-provider, audit-filter.
 
-A criar: `lib/integrations/shopee/`, job de conciliação, e a tela de conexões ganhar remoção/revogação.
+A criar: `lib/integrations/shopee/`, listagem de alterados do Mercado Livre em `lib/integrations/reconcile.ts`, e a tela de conexões ganhar remoção/revogação.
 
 ## Configuração
 
