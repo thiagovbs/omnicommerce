@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { currentActor } from "@/lib/current-actor";
+import { providerDoCanal } from "@/lib/domain/marketplace-provider";
 import { isOrgAdmin } from "@/lib/domain/roles";
 import { authorizationUrl } from "@/lib/integrations/mercadolivre/oauth";
 import { criarEstado, STATE_COOKIE } from "@/lib/integrations/oauth-state";
@@ -18,10 +19,14 @@ export async function GET(request: Request) {
   const marketplace = marketplaceId
     ? await prisma.marketplace.findFirst({
         where: { id: marketplaceId, organizationId: actor.organizationId, active: true },
-        select: { id: true },
+        select: { id: true, code: true },
       })
     : null;
-  if (!marketplace) redirect("/integrations?erro=marketplace");
+  // Canal de outro provedor é recusado aqui, antes de mandar o usuário ao ML:
+  // o retorno gravaria a conexão do Mercado Livre no canal errado.
+  if (!marketplace || providerDoCanal(marketplace.code) !== "MERCADO_LIVRE") {
+    redirect("/integrations?erro=marketplace");
+  }
 
   const { nonce, cookie } = criarEstado(actor.organizationId, marketplace.id);
   (await cookies()).set(STATE_COOKIE, cookie, {

@@ -1,5 +1,6 @@
 import "server-only";
 import { MarketplaceProvider, PrismaClient } from "@prisma/client";
+import { providerDoCanal } from "../domain/marketplace-provider";
 import { OrderError, textInput } from "../domain/order-input";
 import { encryptSecret } from "../integrations/crypto";
 import { assertOrgAdmin } from "./access";
@@ -35,9 +36,17 @@ export async function saveProviderConnection(db: PrismaClient, actor: UserActor,
     await assertOrgAdmin(tx, actor);
     const marketplace = await tx.marketplace.findFirst({
       where: { id: marketplaceId, organizationId: actor.organizationId, active: true },
-      select: { id: true, name: true },
+      select: { id: true, name: true, code: true },
     });
     if (!marketplace) throw new OrderError("Marketplace não encontrado ou inativo.");
+
+    // O provedor precisa ser o do canal. A conexão é única por
+    // (provider, externalAccountId) e o upsert abaixo reescreve o marketplaceId:
+    // autorizar a partir do canal errado moveria a conexão para ele e os pedidos
+    // do provedor passariam a entrar nesse canal, sem erro visível.
+    if (providerDoCanal(marketplace.code) !== input.provider) {
+      throw new OrderError(`O canal ${marketplace.name} não aceita essa autorização.`);
+    }
 
     // A conta do provedor pertence a uma conexão só, e ela pode já estar noutro
     // tenant: recusar é melhor que roubar a conta silenciosamente.

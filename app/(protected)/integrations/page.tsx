@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { format } from "date-fns";
 import { currentActor } from "@/lib/current-actor";
+import { providerDoCanal } from "@/lib/domain/marketplace-provider";
 import { isOrgAdmin } from "@/lib/domain/roles";
 import { oauthConfigured } from "@/lib/integrations/mercadolivre/oauth";
 import { prisma } from "@/lib/prisma";
@@ -85,15 +86,17 @@ export default async function IntegrationsPage({
               </div>)}
           </td>
           <td className="p-4 align-top">
-            {mlDisponivel
-              ? <a
-                  href={`/api/integrations/mercadolivre/authorize?marketplaceId=${marketplace.id}`}
-                  className="inline-block rounded border px-3 py-1 hover:bg-gray-50"
-                >
-                  {marketplace.connections.some((c) => c.provider === "MERCADO_LIVRE")
-                    ? "Reautorizar Mercado Livre" : "Conectar Mercado Livre"}
-                </a>
-              : <span className="text-gray-400">Indisponível</span>}
+            {providerDoCanal(marketplace.code) !== "MERCADO_LIVRE"
+              ? <span className="text-gray-400">—</span>
+              : mlDisponivel
+                ? <a
+                    href={`/api/integrations/mercadolivre/authorize?marketplaceId=${marketplace.id}`}
+                    className="inline-block rounded border px-3 py-1 hover:bg-gray-50"
+                  >
+                    {marketplace.connections.some((c) => c.provider === "MERCADO_LIVRE")
+                      ? "Reautorizar Mercado Livre" : "Conectar Mercado Livre"}
+                  </a>
+                : <span className="text-gray-400">Indisponível</span>}
           </td>
         </tr>)}</tbody>
       </table>
