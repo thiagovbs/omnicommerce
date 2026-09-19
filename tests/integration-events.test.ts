@@ -66,11 +66,11 @@ test("recepção, conexão e teto de tentativas em PostgreSQL", async (t) => {
     });
 
     await t.test("webhook: segredo errado responde 404 sem tocar no banco", async () => {
-      const before = await db.integrationEvent.count();
+      const before = await db.integrationEvent.count({ where: { marketplaceId: channel.id } });
       for (const wrong of ["", "curto", secret + "x", secret.toUpperCase()]) {
         assert.equal((await post(notification(), wrong)).status, 404);
       }
-      assert.equal(await db.integrationEvent.count(), before);
+      assert.equal(await db.integrationEvent.count({ where: { marketplaceId: channel.id } }), before);
     });
 
     await t.test("webhook: aviso inválido responde 400", async () => {
@@ -80,7 +80,7 @@ test("recepção, conexão e teto de tentativas em PostgreSQL", async (t) => {
     });
 
     await t.test("webhook: tópico alheio, aplicação alheia e vendedor desconhecido são confirmados e descartados", async () => {
-      const before = await db.integrationEvent.count();
+      const before = await db.integrationEvent.count({ where: { marketplaceId: channel.id } });
       for (const body of [notification({ topic: "questions" }), notification({ user_id: 31415 })]) {
         const response = await post(body);
         assert.equal(response.status, 200);
@@ -89,7 +89,7 @@ test("recepção, conexão e teto de tentativas em PostgreSQL", async (t) => {
       process.env.MERCADO_LIVRE_APP_ID = "app-esperado";
       assert.deepEqual(await (await post(notification())).json(), { status: "ignored" });
       delete process.env.MERCADO_LIVRE_APP_ID;
-      assert.equal(await db.integrationEvent.count(), before);
+      assert.equal(await db.integrationEvent.count({ where: { marketplaceId: channel.id } }), before);
     });
 
     await t.test("webhook: aviso válido enfileira uma vez, com conexão e pendência de publicação", async () => {

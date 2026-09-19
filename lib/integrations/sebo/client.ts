@@ -1,5 +1,5 @@
 import "server-only";
-import { OrderError } from "../../domain/order-input";
+import { objectInput, OrderError } from "../../domain/order-input";
 import { ProviderAuthError, ProviderTransientError } from "../mercadolivre/client";
 
 export class SeboConfigurationError extends Error {}
@@ -32,4 +32,37 @@ export async function fetchSeboOrder(token: string, orderId: string, fetcher: ty
   if (response.status === 429 || response.status >= 500) throw new ProviderTransientError("SEBO_UNAVAILABLE");
   if (!response.ok) throw new OrderError("Falha ao consultar o pedido no Sebo On-Line.");
   return response.json() as Promise<unknown>;
+}
+
+/// Lista o que mudou desde uma data, para a conciliação. Só identificação e
+/// carimbo: o pedido inteiro é buscado depois, pelo caminho normal.
+export async function listChangedSeboOrders(
+  token: string, desde: Date, fetcher: typeof fetch = fetch,
+) {
+  const url = `${seboApiBase()}/integration/orders?updated_since=${
+    encodeURIComponent(desde.toISOString())}&limit=200`;
+  const response = await fetcher(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    redirect: "error",
+    cache: "no-store",
+    signal: AbortSignal.timeout(15000),
+  });
+  if (response.status === 401 || response.status === 403) throw new ProviderAuthError("SEBO_UNAUTHORIZED");
+  if (response.status === 429 || response.status >= 500) throw new ProviderTransientError("SEBO_UNAVAILABLE");
+  if (!response.ok) throw new OrderError("Falha ao listar pedidos no Sebo On-Line.");
+
+  const corpo: unknown = await response.json();
+  const itens = Array.isArray(corpo) ? corpo : null;
+  if (!itens) throw new OrderError("Listagem do Sebo On-Line em formato inesperado.");
+  return itens.map((item) => {
+    const linha = objectInput(item);
+    const externalOrderId = linha.id === undefined || linha.id === null
+      ? "" : String(linha.id);
+    const carimbo = typeof linha.updated_at === "string" ? new Date(linha.updated_at) : null;
+    if (!externalOrderId || !carimbo || !Number.isFinite(carimbo.getTime())) {
+      throw new OrderError("Pedido sem identificador ou data na listagem do Sebo On-Line.");
+    }
+    return { externalOrderId, updatedAt: carimbo };
+  });
 }

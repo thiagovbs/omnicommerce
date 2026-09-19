@@ -9,7 +9,7 @@ Aplicação publicada em `https://omnicommerce.vercel.app` (Vercel), banco no Ne
 
 - **Fila:** QStash para entrega HTTP, mantendo Next.js, Prisma e PostgreSQL. RabbitMQ foi descartado por exigir broker gerenciado e consumidor contínuo hospedado.
 - **Estágio do payload:** `IntegrationEvent.payload` guarda a notificação crua; consultar o pedido e normalizar acontece no job. Um salto de fila por notificação.
-- **Agendador:** schedule do próprio QStash (`omnicommerce-dispatch-outbox`, a cada 5 minutos) chamando o dispatcher, para não amarrar a hospedagem.
+- **Agendador:** schedules do próprio QStash, para não amarrar a hospedagem. `omnicommerce-dispatch-outbox` a cada 5 minutos publica o outbox; a conciliação roda espaçada (de hora em hora basta), porque é rede de segurança, não via principal.
 - **Loja própria pelo mesmo caminho dos marketplaces:** o Sebo entra como provedor `SEBO_ONLINE` e reaproveita todo o pipeline. Um modelo mental só.
 - **Migrations na publicação:** Build Command `npm run build:vercel`. O `build` normal não toca o banco, senão o estágio builder do Dockerfile quebraria.
 
@@ -64,12 +64,11 @@ O que encurtou cada diagnóstico foi instrumentação, não tentativa: o status 
 - **O Mercado Livre não concede `offline_access` a esta aplicação.** Provado pela auditoria: escopo pedido `offline_access read write`, escopo concedido sem ele, resposta de token sem `refresh_token`. O portal também não oferece esse escopo na lista selecionável. Consequência: a credencial vale 6 horas e exige reautorizar na tela. O código trata isso com mensagem explícita e conexão marcada como expirada; a saída é do lado do ML (outra aplicação, usuário de teste ou suporte), não do código.
 - **Nenhum provedor chega a `SHIPPED` ou `DELIVERED`.** No ML isso depende do recurso de shipments, que o recurso de pedido não carrega; o sebo não tem o conceito. O mapeamento vai até `PAID`/`CANCELLED`.
 - **O sebo não tem frete, taxa nem desconto.** São zero declarado e documentado, diferente do zero presumido que o normalizador do ML proíbe.
-- **Janela residual de perda no sebo.** Se o processo morrer entre o commit do pedido e o commit do aviso, o pedido existe sem aviso e nada o repesca. Só a conciliação periódica fecha isso.
+- **Conciliação implementada só para o Sebo.** O job pergunta ao provedor o que mudou e enfileira o que falta, fechando a janela entre gravar o pedido e gravar o aviso. Para o Mercado Livre ela falha com erro nomeado: os parâmetros de busca por data não foram confirmados na documentação e não há pedido para exercitar.
 
 ## O que falta
 
 1. **Validar o normalizador do Mercado Livre contra um pedido real.** É a pendência de maior risco. A conta não tem vendas; o usuário de teste do ML permitiria criar uma. O mapeamento está isolado em `lib/integrations/mercadolivre/normalize.ts` e coberto por fixture — trocar a fixture por um pedido real faz qualquer divergência virar teste vermelho, como já aconteceu com o sebo.
-2. **Conciliação periódica** de pedidos alterados, para recuperar lacunas de notificação. Serve a ML e sebo ao mesmo tempo e fecha a janela residual acima.
 3. **Estado de envio**, integrando o recurso de shipments do ML.
 4. **Shopee**, depois de conferir permissões e documentação acessível na conta. O resolver falha com erro nomeado para esse provedor.
 5. **Precisão no dashboard**: a agregação ainda converte Decimal para Number na exibição, o que perde precisão em somas grandes. O caminho de pedidos usa Decimal de ponta a ponta.
@@ -80,7 +79,7 @@ O que encurtou cada diagnóstico foi instrumentação, não tentativa: o status 
 Implementado:
 - `app/api/webhooks/{mercadolivre,sebo}/[secret]/route.ts` — recepção, cascas finas sobre `lib`.
 - `app/api/integrations/mercadolivre/{authorize,callback}/route.ts` — autorização OAuth.
-- `app/api/jobs/{marketplace-events,dispatch-outbox}/route.ts` — processamento assinado e publicação.
+- `app/api/jobs/{marketplace-events,dispatch-outbox,reconcile}/route.ts` — processamento assinado, publicação e conciliação.
 - `lib/integrations/` — `webhook.ts` comum, `crypto.ts`, `oauth-state.ts`, `resolve.ts`, e os adapters `mercadolivre/` e `sebo/`.
 - `lib/services/` — sales, integration-events, outbox, connections, members, organizations, access, transactions.
 - `lib/domain/` — order-input, sale-status, roles, marketplace-provider, audit-filter.
