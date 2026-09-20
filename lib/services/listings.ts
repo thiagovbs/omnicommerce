@@ -51,6 +51,8 @@ export type ListingPublisher = (listing: ListingWithProduct) => Promise<PublishR
  */
 export async function requestPublication(
   db: PrismaClient, actor: UserActor, productId: string, marketplaceIds: string[],
+  /// Conta escolhida por canal, quando o canal tem mais de uma conectada.
+  contas: Record<string, string> = {},
 ) {
   const id = textInput(productId, "Produto");
   if (!Array.isArray(marketplaceIds) || !marketplaceIds.length || marketplaceIds.length > 50) {
@@ -74,7 +76,7 @@ export async function requestPublication(
     });
     if (marketplaces.length !== canais.length) throw new OrderError("Canal não encontrado ou inativo.");
 
-    const pedidos: { canal: string; listingId: string }[] = [];
+    const pedidos: { canal: string; conta: string; listingId: string }[] = [];
     for (const marketplace of marketplaces) {
       // Sem provedor conhecido não há para onde publicar. O erro nomeia o canal
       // porque a tela oferece vários de uma vez.
@@ -83,18 +85,51 @@ export async function requestPublication(
       }
       // A conexão é o que carrega a credencial: sem ela a publicação falharia
       // no trabalhador, longe de quem apertou o botão.
-      const conexao = await tx.marketplaceConnection.findFirst({
-        where: { marketplaceId: marketplace.id, status: "ACTIVE" }, select: { id: true },
+      const conexoes = await tx.marketplaceConnection.findMany({
+        where: { marketplaceId: marketplace.id, status: "ACTIVE" },
+        select: { id: true, externalAccountId: true },
+        orderBy: { externalAccountId: "asc" },
       });
-      if (!conexao) throw new OrderError("O canal " + marketplace.name + " não está conectado.");
+      if (!conexoes.length) throw new OrderError("O canal " + marketplace.name + " não está conectado.");
+
+      const jaExiste = await tx.listing.findUnique({
+        where: { productId_marketplaceId: { productId: id, marketplaceId: marketplace.id } },
+        select: { id: true, status: true, connectionId: true },
+      });
+
+      // Qual conta recebe o anúncio, em ordem: a escolhida agora, a que o
+      // anúncio já usava, ou a única que existe. Com mais de uma conta e
+      // nenhuma escolha, recusa -- adivinhar aqui publicaria na conta errada
+      // sem aviso, que é pior que não publicar.
+      const escolhida = contas[marketplace.id]
+        ? conexoes.find((c) => c.id === contas[marketplace.id])
+        : conexoes.find((c) => c.id === jaExiste?.connectionId)
+          ?? (conexoes.length === 1 ? conexoes[0] : undefined);
+      if (!escolhida) {
+        throw new OrderError(
+          "O canal " + marketplace.name + " tem mais de uma conta conectada ("
+          + conexoes.map((c) => c.externalAccountId).join(", ")
+          + "). Escolha em qual publicar.");
+      }
 
       const listing = await tx.listing.upsert({
         where: { productId_marketplaceId: { productId: id, marketplaceId: marketplace.id } },
         // Um anúncio já publicado continua publicado: só volta a ficar pendente.
-        update: { needsSync: true, availableAt: new Date(), attempts: 0, lastError: null },
-        create: { productId: id, marketplaceId: marketplace.id, status: "PUBLISHING", needsSync: true },
+        update: { needsSync: true, availableAt: new Date(), attempts: 0, lastError: null, connectionId: escolhida.id },
+        create: {
+          productId: id, marketplaceId: marketplace.id, connectionId: escolhida.id,
+          status: "PUBLISHING", needsSync: true,
+        },
         select: { id: true, status: true },
       });
+
+      // Trocar a conta de um anúncio já publicado deixaria o anúncio antigo
+      // órfão na conta anterior, anunciando estoque que ninguém atualiza.
+      if (jaExiste?.connectionId && jaExiste.connectionId !== escolhida.id && jaExiste.status === "PUBLISHED") {
+        throw new OrderError(
+          "Este produto já está publicado noutra conta de " + marketplace.name
+          + ". Despublique lá antes de mudar de conta.");
+      }
       // Qualquer estado que não seja PUBLISHED volta para PUBLISHING: a
       // publicação foi pedida explicitamente. Cobre o rascunho criado ao
       // escolher a categoria, que de outro modo ficaria fora da varredura do
@@ -104,15 +139,15 @@ export async function requestPublication(
       if (listing.status !== "PUBLISHED") {
         await tx.listing.update({ where: { id: listing.id }, data: { status: "PUBLISHING" } });
       }
-      pedidos.push({ canal: marketplace.name, listingId: listing.id });
+      pedidos.push({ canal: marketplace.name, conta: escolhida.externalAccountId, listingId: listing.id });
     }
 
     await tx.auditLog.create({ data: {
       action: "UPDATE", entity: "PRODUCT", entityId: id,
       organizationId: actor.organizationId, userId: actor.userId,
       details: "Publicação de " + produto.sku + " pedida em: "
-        + pedidos.map((p) => p.canal).join(", ") + ".",
-      newData: { canais: pedidos.map((p) => p.canal) },
+        + pedidos.map((p) => p.canal + " (" + p.conta + ")").join(", ") + ".",
+      newData: { canais: pedidos.map((p) => ({ canal: p.canal, conta: p.conta })) },
     } });
     return pedidos;
   });

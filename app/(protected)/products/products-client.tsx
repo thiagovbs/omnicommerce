@@ -29,6 +29,10 @@ export function ProductsClient({ produtos, canais }: { produtos: ProductRow[]; c
   const [aviso, setAviso] = useState<{ erro: boolean; texto: string } | null>(null);
   const [pendente, startTransition] = useTransition();
   const [emFoco, setEmFoco] = useState<string | null>(null);
+  // Conta escolhida por canal, só para os canais com mais de uma conectada.
+  // Sem escolha, publicar é recusado no serviço: adivinhar aqui poderia mandar
+  // o anúncio para a conta real quando se queria a de teste.
+  const [conta, setConta] = useState<Record<string, string>>({});
 
   const publicaveis = canais.filter((c) => c.publicavel);
 
@@ -167,6 +171,11 @@ export function ProductsClient({ produtos, canais }: { produtos: ProductRow[]; c
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${marca.classe}`}>
                         {marca.texto}
                       </span>
+                      {listing.conta && (
+                        <span className="font-mono text-xs text-gray-400" title="Conta do provedor">
+                          {listing.conta}
+                        </span>
+                      )}
                       {listing.publishedPrice && (
                         <span className="text-gray-500">
                           no canal: {moeda(listing.publishedPrice, produto.currency)} · {listing.publishedStock}
@@ -182,21 +191,45 @@ export function ProductsClient({ produtos, canais }: { produtos: ProductRow[]; c
                 <div className="ml-auto flex flex-wrap gap-2">
                   {publicaveis.map((canal) => {
                     const jaTem = produto.listings.find((l) => l.marketplace.id === canal.id);
+                    // Com uma conta só não há o que escolher. Com mais de uma, a
+                    // escolha é obrigatória, e a já usada pelo anúncio vem
+                    // pré-selecionada para não trocar de conta sem querer.
+                    const varias = canal.contas.length > 1;
+                    const jaUsada = canal.contas.find((c) => c.externalAccountId === jaTem?.conta);
+                    const escolhida = conta[canal.id] ?? jaUsada?.id ?? "";
                     return (
-                      <button
-                        key={canal.id}
-                        onClick={() => rodar(
-                          () => publicar(produto.id, [canal.id]),
-                          (r: { canais: string[]; sincronizados: number }) => r.sincronizados
-                            ? `${produto.sku} publicado em ${r.canais.join(", ")}.`
-                            : `Publicação de ${produto.sku} enfileirada para ${r.canais.join(", ")}; o agendador conclui.`)}
-                        disabled={pendente || !produto.active}
-                        title={produto.active ? undefined : "Produto inativo não pode ser publicado"}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-700 disabled:opacity-40"
-                      >
-                        <Send size={14} />
-                        {jaTem ? "Republicar" : "Publicar"} em {canal.name}
-                      </button>
+                      <div key={canal.id} className="flex items-center gap-1.5">
+                        {varias && (
+                          <select
+                            value={escolhida}
+                            onChange={(evento) => setConta({ ...conta, [canal.id]: evento.target.value })}
+                            disabled={!!jaUsada}
+                            title={jaUsada
+                              ? "Já publicado nesta conta; despublique antes de trocar"
+                              : `Conta de ${canal.name}`}
+                            className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 font-mono text-xs disabled:bg-gray-100 disabled:text-gray-500"
+                          >
+                            <option value="">Conta…</option>
+                            {canal.contas.map((c) => (
+                              <option key={c.id} value={c.id}>{c.externalAccountId}</option>
+                            ))}
+                          </select>
+                        )}
+                        <button
+                          onClick={() => rodar(
+                            () => publicar(produto.id, [canal.id], escolhida ? { [canal.id]: escolhida } : {}),
+                            (r: { canais: string[]; sincronizados: number }) => r.sincronizados
+                              ? `${produto.sku} publicado em ${r.canais.join(", ")}.`
+                              : `Publicação de ${produto.sku} enfileirada para ${r.canais.join(", ")}; o agendador conclui.`)}
+                          disabled={pendente || !produto.active || (varias && !escolhida)}
+                          title={!produto.active ? "Produto inativo não pode ser publicado"
+                            : varias && !escolhida ? "Escolha a conta primeiro" : undefined}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-700 disabled:opacity-40"
+                        >
+                          <Send size={14} />
+                          {jaTem ? "Republicar" : "Publicar"} em {canal.name}
+                        </button>
+                      </div>
                     );
                   })}
                 </div>

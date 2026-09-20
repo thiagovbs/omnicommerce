@@ -741,3 +741,90 @@ test("álbum de imagens em PostgreSQL", async (t) => {
     });
   } finally { await db3.$disconnect(); }
 });
+
+test("canal com mais de uma conta conectada", async (t) => {
+  const db5 = new PrismaClient();
+  try {
+    const org = await db5.organization.create({ data: { name: "Duas contas" } });
+    const admin = await db5.user.create({ data: {
+      organizationId: org.id, email: `admin-contas-${Date.now()}@local.test`,
+      name: "Admin", passwordHash: "x", role: "ADMIN",
+    } });
+    const ator = { userId: admin.id, organizationId: org.id };
+    const canal = await db5.marketplace.create({
+      data: { organizationId: org.id, code: "mercado_livre", name: "ML de duas contas" },
+    });
+    const real = await db5.marketplaceConnection.create({ data: {
+      marketplaceId: canal.id, provider: "MERCADO_LIVRE",
+      externalAccountId: `real-${Date.now()}`, accessToken: "cifrado",
+    } });
+    const teste = await db5.marketplaceConnection.create({ data: {
+      marketplaceId: canal.id, provider: "MERCADO_LIVRE",
+      externalAccountId: `teste-${Date.now()}`, accessToken: "cifrado",
+    } });
+    const produto = await createProduct(db5, ator, {
+      sku: "CONTA-001", title: "Produto de duas contas", price: "10.00", stock: 2,
+    });
+
+    await t.test("regressão: com duas contas e nenhuma escolha, recusa em vez de adivinhar", async () => {
+      // Antes disto a publicação caía num findFirst sem critério e ia para a
+      // conta que o banco devolvesse primeiro -- na prática, a real.
+      await assert.rejects(
+        requestPublication(db5, ator, produto.id, [canal.id]),
+        (e: Error) => e instanceof OrderError
+          && /mais de uma conta conectada/.test(e.message)
+          && e.message.includes(real.externalAccountId)
+          && e.message.includes(teste.externalAccountId));
+      assert.equal(await db5.listing.count({ where: { productId: produto.id } }), 0,
+        "recusar não pode deixar anúncio pela metade");
+    });
+
+    await t.test("a conta escolhida é a que fica gravada no anúncio", async () => {
+      await requestPublication(db5, ator, produto.id, [canal.id], { [canal.id]: teste.id });
+      const listing = await db5.listing.findFirstOrThrow({ where: { productId: produto.id } });
+      assert.equal(listing.connectionId, teste.id);
+    });
+
+    await t.test("republicar mantém a conta sem precisar reescolher", async () => {
+      await requestPublication(db5, ator, produto.id, [canal.id]);
+      const listing = await db5.listing.findFirstOrThrow({ where: { productId: produto.id } });
+      assert.equal(listing.connectionId, teste.id, "a conta do anúncio decide quando não há escolha nova");
+    });
+
+    await t.test("a credencial usada é a da conta gravada no anúncio", async () => {
+      const listing = await db5.listing.findFirstOrThrow({ where: { productId: produto.id } });
+      const usada = await db5.marketplaceConnection.findUniqueOrThrow({
+        where: { id: listing.connectionId! }, select: { externalAccountId: true },
+      });
+      // É esta conexão que o publicador lê por id. Escolhendo sozinho, ele
+      // pegaria a outra conta -- que foi o defeito.
+      assert.equal(usada.externalAccountId, teste.externalAccountId);
+      assert.notEqual(usada.externalAccountId, real.externalAccountId);
+    });
+
+    await t.test("trocar a conta de um anúncio publicado é recusado", async () => {
+      await db5.listing.updateMany({
+        where: { productId: produto.id }, data: { status: "PUBLISHED", externalListingId: "MLB1" },
+      });
+      await assert.rejects(
+        requestPublication(db5, ator, produto.id, [canal.id], { [canal.id]: real.id }),
+        (e: Error) => e instanceof OrderError && /Despublique lá antes/.test(e.message),
+        "trocar de conta deixaria o anúncio antigo órfão na conta anterior");
+    });
+
+    await t.test("canal com uma conta só continua sem exigir escolha", async () => {
+      const soUma = await db5.marketplace.create({
+        data: { organizationId: org.id, code: "sebo", name: "Sebo de uma conta" },
+      });
+      const unica = await db5.marketplaceConnection.create({ data: {
+        marketplaceId: soUma.id, provider: "SEBO_ONLINE",
+        externalAccountId: `unica-${Date.now()}`, accessToken: "cifrado",
+      } });
+      await requestPublication(db5, ator, produto.id, [soUma.id]);
+      const listing = await db5.listing.findFirstOrThrow({
+        where: { productId: produto.id, marketplaceId: soUma.id },
+      });
+      assert.equal(listing.connectionId, unica.id);
+    });
+  } finally { await db5.$disconnect(); }
+});

@@ -56,10 +56,12 @@ export async function ajustarEstoque(productId: string, stock: unknown) {
  * meio, o anúncio segue marcado como pendente e o agendador o pega. Por isso a
  * falha da sincronização não vira erro da ação: o pedido já foi registrado.
  */
-export async function publicar(productId: string, marketplaceIds: string[]) {
+export async function publicar(
+  productId: string, marketplaceIds: string[], contas: Record<string, string> = {},
+) {
   const actor = await currentActor();
   try {
-    const pedidos = await requestPublication(prisma, actor, productId, marketplaceIds);
+    const pedidos = await requestPublication(prisma, actor, productId, marketplaceIds, contas);
     let sincronizados = 0;
     try {
       const resultado = await syncListings(
@@ -69,7 +71,11 @@ export async function publicar(productId: string, marketplaceIds: string[]) {
       // Fica para o agendador; o estado no banco é o que manda.
     }
     revalidatePath("/products");
-    return { ok: true as const, canais: pedidos.map((p) => p.canal), sincronizados };
+    return {
+      ok: true as const,
+      canais: pedidos.map((p) => p.canal + " (" + p.conta + ")"),
+      sincronizados,
+    };
   } catch (erro) {
     return { ok: false as const, erro: mensagem(erro) };
   }

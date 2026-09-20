@@ -245,6 +245,7 @@ export async function listProducts(db: PrismaClient, actor: UserActor) {
         select: {
           id: true, status: true, needsSync: true, externalListingId: true, categoryExternalId: true,
           publishedPrice: true, publishedStock: true, lastPublishedAt: true, lastError: true,
+          connection: { select: { externalAccountId: true } },
           marketplace: { select: { id: true, name: true, code: true } },
         },
         orderBy: { marketplace: { name: "asc" } },

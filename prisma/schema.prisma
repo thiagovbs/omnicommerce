@@ -304,6 +304,7 @@ model MarketplaceConnection {
 
   marketplace       Marketplace        @relation(fields: [marketplaceId], references: [id], onDelete: Cascade)
   integrationEvents IntegrationEvent[]
+  listings          Listing[]
 
   /// A provider account belongs to exactly one connection, so a notification maps to one tenant.
   @@unique([provider, externalAccountId])
@@ -371,6 +372,12 @@ model Listing {
   productId           String
   marketplaceId       String
   status              ListingStatus @default(DRAFT)
+  /// Em qual conta do provedor este anúncio é publicado.
+  ///
+  /// Um canal pode ter mais de uma conta conectada -- uma real e uma de teste,
+  /// por exemplo. Sem registrar a escolha, a publicação caía num `findFirst`
+  /// sem critério e podia ir para a conta errada sem aviso nenhum.
+  connectionId        String?
   /// Identificador do anúncio no provedor. Só existe depois de publicado.
   externalListingId   String?
   publishedPrice      Decimal?      @db.Decimal(14, 2)
@@ -407,8 +414,10 @@ model Listing {
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt
 
-  product     Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
-  marketplace Marketplace @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  product     Product                @relation(fields: [productId], references: [id], onDelete: Cascade)
+  marketplace Marketplace            @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)
+  /// Restrict: apagar a conexão deixaria o anúncio sem saber onde está publicado.
+  connection  MarketplaceConnection? @relation(fields: [connectionId], references: [id], onDelete: Restrict)
 
   /// Um produto tem no máximo um anúncio por canal.
   @@unique([productId, marketplaceId])

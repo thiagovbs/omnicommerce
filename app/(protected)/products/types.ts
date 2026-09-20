@@ -8,6 +8,8 @@ export interface ListingRow {
   externalListingId: string | null;
   /// Categoria escolhida neste canal, no identificador do provedor.
   categoryExternalId: string | null;
+  /// Conta do provedor em que este anúncio está (ou vai) publicado.
+  conta: string | null;
   publishedPrice: string | null;
   publishedStock: number | null;
   lastPublishedAt: string | null;
@@ -41,4 +43,7 @@ export interface ChannelRow {
   /// mostra o motivo em vez de oferecer um botão que falharia depois.
   publicavel: boolean;
   motivo: string | null;
+  /// Contas conectadas neste canal. Com mais de uma, a tela obriga a escolher
+  /// antes de publicar -- é o que impede um anúncio ir para a conta errada.
+  contas: { id: string; externalAccountId: string }[];
 }

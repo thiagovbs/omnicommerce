@@ -17,7 +17,11 @@ export default async function ProductsPage() {
       orderBy: { name: "asc" },
       select: {
         id: true, name: true, code: true,
-        connections: { where: { status: "ACTIVE" }, select: { id: true }, take: 1 },
+        connections: {
+          where: { status: "ACTIVE" },
+          select: { id: true, externalAccountId: true },
+          orderBy: { externalAccountId: "asc" },
+        },
       },
     }),
   ]);
@@ -33,6 +37,7 @@ export default async function ProductsPage() {
       id: l.id, status: l.status, needsSync: l.needsSync,
       externalListingId: l.externalListingId,
       categoryExternalId: l.categoryExternalId,
+      conta: l.connection?.externalAccountId ?? null,
       publishedPrice: l.publishedPrice ? l.publishedPrice.toFixed(2) : null,
       publishedStock: l.publishedStock,
       lastPublishedAt: l.lastPublishedAt ? l.lastPublishedAt.toISOString() : null,
@@ -42,13 +47,14 @@ export default async function ProductsPage() {
   }));
 
   const canaisPublicaveis: ChannelRow[] = canais.map((c) => {
+    const contas = c.connections.map((x) => ({ id: x.id, externalAccountId: x.externalAccountId }));
     if (!providerDoCanal(c.code)) {
-      return { id: c.id, name: c.name, code: c.code, publicavel: false, motivo: "Canal sem integração" };
+      return { id: c.id, name: c.name, code: c.code, publicavel: false, motivo: "Canal sem integração", contas };
     }
-    if (!c.connections.length) {
-      return { id: c.id, name: c.name, code: c.code, publicavel: false, motivo: "Canal não conectado" };
+    if (!contas.length) {
+      return { id: c.id, name: c.name, code: c.code, publicavel: false, motivo: "Canal não conectado", contas };
     }
-    return { id: c.id, name: c.name, code: c.code, publicavel: true, motivo: null };
+    return { id: c.id, name: c.name, code: c.code, publicavel: true, motivo: null, contas };
   });
 
   return <ProductsClient produtos={linhas} canais={canaisPublicaveis} />;
