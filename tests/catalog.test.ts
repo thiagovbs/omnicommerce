@@ -7,7 +7,7 @@ import {
   createProduct, listProducts, setProductStock, updateProduct,
 } from "../lib/services/products";
 import {
-  estaEmDia, ListingPublisher, MAX_SYNC_ATTEMPTS, requestPublication, syncListings,
+  estaEmDia, ListingPublisher, MAX_SYNC_ATTEMPTS, pushAposVenda, requestPublication, syncListings,
 } from "../lib/services/listings";
 import { applyIntegratedOrder } from "../lib/services/sales";
 import { parseIntegratedOrder } from "../lib/domain/order-input";
@@ -906,4 +906,80 @@ test("mudança de título chega ao canal", async (t) => {
       assert.deepEqual(await publicar(), ["Nome novo"], "voltou ao provedor por causa da descrição");
     });
   } finally { await db6.$disconnect(); }
+});
+
+test("venda empurra o estoque aos canais na hora", async (t) => {
+  const db7 = new PrismaClient();
+  try {
+    const org = await db7.organization.create({ data: { name: "Empurrão" } });
+    const admin = await db7.user.create({ data: {
+      organizationId: org.id, email: `admin-push-${Date.now()}@local.test`,
+      name: "Admin", passwordHash: "x", role: "ADMIN",
+    } });
+    const ator = { userId: admin.id, organizationId: org.id };
+    const canal = await db7.marketplace.create({
+      data: { organizationId: org.id, code: "sebo", name: "Sebo do empurrão" },
+    });
+    await db7.marketplaceConnection.create({ data: {
+      marketplaceId: canal.id, provider: "SEBO_ONLINE",
+      externalAccountId: `loja-push-${Date.now()}`, accessToken: "cifrado",
+    } });
+
+    const produto = await createProduct(db7, ator, {
+      sku: "PUSH-001", title: "Produto do empurrão", price: "10.00", stock: 5,
+    });
+    await requestPublication(db7, ator, produto.id, [canal.id]);
+    const publicador: ListingPublisher = async (l) => ({
+      externalListingId: "sebo-push", price: l.product.price.toFixed(2), stock: l.product.stock,
+    });
+    await syncListings(db7, publicador, 10, org.id);
+
+    const evento = await db7.integrationEvent.create({ data: {
+      marketplaceId: canal.id, externalEventId: `push-${Date.now()}`,
+      externalOrderId: "pedido-push", payload: {},
+    } });
+    await serializable(db7, async (tx) => applyIntegratedOrder(tx, {
+      marketplaceId: canal.id, organizationId: org.id,
+      eventId: evento.id, externalEventId: evento.externalEventId,
+    }, parseIntegratedOrder({
+      externalOrderId: "pedido-push", status: "PAID", externalStatus: "PAID",
+      externalUpdatedAt: "2026-09-20T01:00:00Z", soldAt: "2026-09-20",
+      currency: "BRL", gross: "20.00", shipping: "0.00", discount: "0.00", fees: "0.00",
+      items: [{ title: "Produto do empurrão", sku: "PUSH-001", quantity: 2, unitPrice: "10.00" }],
+    })));
+
+    await t.test("o canal recebe o estoque novo sem esperar o agendador", async () => {
+      const pendente = await db7.listing.findFirstOrThrow({ where: { productId: produto.id } });
+      assert.equal(pendente.needsSync, true, "a venda deixou o anúncio pendente");
+
+      const enviados: number[] = [];
+      const resultado = await pushAposVenda(db7, async (l) => {
+        enviados.push(l.product.stock);
+        return { externalListingId: "sebo-push", price: l.product.price.toFixed(2), stock: l.product.stock };
+      }, evento.id);
+
+      assert.deepEqual(enviados, [3], "5 menos as 2 unidades vendidas");
+      assert.equal(resultado.empurrados, 1);
+      assert.equal(
+        (await db7.listing.findFirstOrThrow({ where: { id: pendente.id } })).needsSync, false);
+    });
+
+    await t.test("falhar no empurrão não propaga: o agendador recupera", async () => {
+      // Mudança de verdade: ligar a marca à mão não bastaria, porque o
+      // trabalhador compara a impressão e concluiria -- com razão -- que não
+      // há o que enviar.
+      await setProductStock(db7, ator, produto.id, 1);
+      // Não lança: o evento já foi processado com sucesso e não pode ser
+      // afetado por um problema na aceleração.
+      const resultado = await pushAposVenda(db7, async () => { throw new Error("provedor fora"); }, evento.id);
+      assert.deepEqual(resultado, { empurrados: 0 });
+      assert.equal(
+        (await db7.listing.findFirstOrThrow({ where: { productId: produto.id } })).needsSync, true,
+        "segue pendente para o agendador");
+    });
+
+    await t.test("evento inexistente não quebra", async () => {
+      assert.deepEqual(await pushAposVenda(db7, publicador, "nao-existe"), { empurrados: 0 });
+    });
+  } finally { await db7.$disconnect(); }
 });

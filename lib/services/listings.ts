@@ -299,3 +299,34 @@ export async function syncListings(
   }
   return { candidatos: candidatos.length, publicados, atualizados, emDia, falhas };
 }
+
+/**
+ * Empurra aos canais o que a venda acabou de mudar, sem esperar o agendador.
+ *
+ * Baixa de estoque é urgente de um jeito que preço não é: quem vendeu o último
+ * item quer os outros canais sabendo disso em segundos, não nos até quinze
+ * minutos do agendamento. Quem vende o que não tem paga caro.
+ *
+ * É aceleração, não garantia: o que dá durabilidade continua sendo a marca
+ * gravada no anúncio. Se esta chamada morrer no meio, o agendador termina o
+ * serviço — por isso ela nunca lança.
+ *
+ * Só a organização da venda entra na rodada: uma venda de um tenant não pode
+ * gastar o lote publicando anúncios de outro.
+ */
+export async function pushAposVenda(
+  db: PrismaClient, publish: ListingPublisher, eventId: string,
+) {
+  try {
+    const evento = await db.integrationEvent.findUnique({
+      where: { id: eventId }, select: { marketplace: { select: { organizationId: true } } },
+    });
+    if (!evento) return { empurrados: 0 };
+    const resultado = await syncListings(db, publish, 10, evento.marketplace.organizationId);
+    return { empurrados: resultado.publicados + resultado.atualizados };
+  } catch {
+    // O agendador recupera; falhar aqui não pode afetar o evento, que já foi
+    // processado com sucesso.
+    return { empurrados: 0 };
+  }
+}
