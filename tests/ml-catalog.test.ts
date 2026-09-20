@@ -38,7 +38,7 @@ function anuncio(over: Partial<ListingWithProduct> = {}, produtoOver = {}): List
   return {
     id: "l1", productId: "p1", marketplaceId: "m1", status: "PUBLISHING",
     externalListingId: null, publishedPrice: null, publishedStock: null,
-    publishedImagesHash: null, categoryExternalId: "MLB1716", publishedCategoryId: null,
+    publishedFingerprint: null, categoryExternalId: "MLB1716", publishedCategoryId: null,
     lastPublishedAt: null, needsSync: true, availableAt: new Date(), attempts: 0,
     lastError: null, leaseUntil: null, leaseToken: null,
     createdAt: new Date(), updatedAt: new Date(),
@@ -130,7 +130,9 @@ test("publicação no Mercado Livre sem rede", async (t) => {
       "/items": { corpo: { id: "MLB123", price: 42.5, available_quantity: 4 } },
     });
     const resultado = await publishMercadoLivreListing("t", anuncio(), fetcher);
-    assert.deepEqual(resultado, { externalListingId: "MLB123", price: "42.50", stock: 4 });
+    assert.deepEqual(resultado, {
+      externalListingId: "MLB123", price: "42.50", stock: 4, externalStatus: null,
+    });
 
     const criacao = chamadas.find((c) => c.metodo === "POST" && c.url.endsWith("/items"))!;
     const corpo = criacao.corpo as Record<string, unknown>;
@@ -151,7 +153,9 @@ test("publicação no Mercado Livre sem rede", async (t) => {
     });
     const resultado = await publishMercadoLivreListing(
       "t", anuncio({ externalListingId: "MLB123" }), fetcher);
-    assert.deepEqual(resultado, { externalListingId: "MLB123", price: "39.90", stock: 2 });
+    assert.deepEqual(resultado, {
+      externalListingId: "MLB123", price: "39.90", stock: 2, externalStatus: null,
+    });
 
     const put = chamadas.find((c) => c.metodo === "PUT")!;
     const corpo = put.corpo as Record<string, unknown>;
@@ -242,5 +246,37 @@ test("formato de imagem que o Mercado Livre não aceita", async (t) => {
     await assert.rejects(
       prepararFotos("t", ["data:image/avif;base64,QUJD"], fetcher),
       (e: Error) => e instanceof OrderError && /AVIF/.test(e.message) && /PNG, JPEG, WEBP ou GIF/.test(e.message));
+  });
+});
+
+test("aceito pelo provedor não é o mesmo que no ar", async (t) => {
+  await t.test("under_review é devolvido, não escondido atrás de sucesso", async () => {
+    // Medido: o Mercado Livre aceitou a criação e devolveu under_review com
+    // sub_status waiting_for_patch. Tratar isso como publicado faria a tela
+    // dizer que se está vendendo quando o anúncio nem apareceu.
+    const { fetcher } = provedor({
+      "/attributes": { corpo: ATRIBUTOS },
+      "/pictures/items/upload": { corpo: { id: "F1" } },
+      "/items": {
+        corpo: {
+          id: "MLB7670315210", price: 39.9, available_quantity: 5,
+          status: "under_review", sub_status: ["waiting_for_patch"],
+        },
+      },
+    });
+    const resultado = await publishMercadoLivreListing("t", anuncio(), fetcher);
+    assert.equal(resultado.externalStatus, "under_review");
+    // E o resto continua válido: o anúncio existe e tem identificador.
+    assert.equal(resultado.externalListingId, "MLB7670315210");
+    assert.equal(resultado.stock, 5);
+  });
+
+  await t.test("active é reportado como tal", async () => {
+    const { fetcher } = provedor({
+      "/items/MLB123": { corpo: { id: "MLB123", price: 10, available_quantity: 1, status: "active" } },
+    });
+    const resultado = await publishMercadoLivreListing(
+      "t", anuncio({ externalListingId: "MLB123" }), fetcher);
+    assert.equal(resultado.externalStatus, "active");
   });
 });

@@ -6,8 +6,25 @@ import { ajustarEstoque, publicar, removerProduto, sincronizarAgora } from "./ac
 import { ProductForm } from "./product-form";
 import type { ChannelRow, ListingRow, ProductRow } from "./types";
 
-/// Como cada estado de anúncio se mostra. `needsSync` tem precedência sobre o
-/// status: um anúncio publicado e desatualizado não deve parecer em dia.
+/// O estado do provedor, nas palavras dele, traduzido.
+const ESTADO_DO_PROVEDOR: Record<string, string> = {
+  active: "No ar",
+  under_review: "Em revisão",
+  paused: "Pausado no canal",
+  closed: "Encerrado no canal",
+  inactive: "Inativo no canal",
+  payment_required: "Aguardando pagamento",
+};
+
+/**
+ * Como cada estado de anúncio se mostra.
+ *
+ * `needsSync` tem precedência: um anúncio publicado e desatualizado não deve
+ * parecer em dia. E o estado do PROVEDOR tem precedência sobre o nosso quando
+ * eles discordam: o Mercado Livre aceita a criação e devolve `under_review`,
+ * e mostrar "Publicado" faria parecer que se está vendendo quando o anúncio
+ * ainda não apareceu.
+ */
 function selo(listing: ListingRow) {
   if (listing.status === "FAILED") {
     return { texto: "Falhou", classe: "bg-red-100 text-red-800" };
@@ -16,7 +33,14 @@ function selo(listing: ListingRow) {
     return { texto: listing.status === "PUBLISHED" ? "Desatualizado" : "Publicando", classe: "bg-amber-100 text-amber-800" };
   }
   if (listing.status === "PUBLISHED") {
-    return { texto: "Publicado", classe: "bg-green-100 text-green-800" };
+    const externo = listing.externalStatus;
+    if (externo && externo !== "active") {
+      return {
+        texto: ESTADO_DO_PROVEDOR[externo] ?? externo,
+        classe: "bg-amber-100 text-amber-800",
+      };
+    }
+    return { texto: "No ar", classe: "bg-green-100 text-green-800" };
   }
   return { texto: listing.status === "PAUSED" ? "Pausado" : "Rascunho", classe: "bg-gray-100 text-gray-700" };
 }

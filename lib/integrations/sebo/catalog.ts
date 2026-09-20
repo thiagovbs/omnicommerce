@@ -88,5 +88,7 @@ export async function publishSeboProduct(
     externalListingId: String(id),
     price: resposta.price.toFixed(2),
     stock: resposta.stock,
+    // O sebo não tem revisão: publicado é publicado, e o estado é o `active`.
+    externalStatus: resposta.active === false ? "inactive" : "active",
   };
 }

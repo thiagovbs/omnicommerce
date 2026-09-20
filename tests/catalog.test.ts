@@ -255,14 +255,32 @@ test("catálogo e publicação em PostgreSQL", async (t) => {
       assert(listing.attempts >= MAX_SYNC_ATTEMPTS);
     });
 
-    await t.test("estaEmDia compara preço por valor, não por texto", async () => {
+    await t.test("estaEmDia compara a impressão do que foi enviado", async () => {
       const listing = await db.listing.findFirstOrThrow({
         where: { productId: produtoId },
         include: { product: { include: { images: { orderBy: { position: "asc" } } } } },
       });
       assert.equal(estaEmDia(listing), true);
-      assert.equal(estaEmDia({ ...listing, publishedStock: listing.publishedStock! + 1 }), false);
       assert.equal(estaEmDia({ ...listing, status: "PUBLISHING" }), false);
+
+      // Regressão: trocar SÓ o título precisa desatualizar o anúncio. Antes, a
+      // comparação olhava preço, estoque, imagens e categoria -- e o título
+      // mudado nunca chegava ao canal.
+      assert.equal(
+        estaEmDia({ ...listing, product: { ...listing.product, title: "Outro nome" } }), false,
+        "título mudado é mudança publicável");
+      for (const [campo, valor] of [
+        ["description", "outra descrição"], ["brand", "Outra marca"],
+        ["condition", "usado"], ["category", "Outra categoria"], ["active", false],
+      ] as const) {
+        assert.equal(
+          estaEmDia({ ...listing, product: { ...listing.product, [campo]: valor } }), false,
+          `${campo} mudado é mudança publicável`);
+      }
+
+      // E o que o provedor confirmou não decide trabalho: se ele arredondar o
+      // preço, comparar com a resposta dele reenviaria a cada rodada.
+      assert.equal(estaEmDia({ ...listing, publishedStock: 999, publishedPrice: null }), true);
     });
 
     await t.test("venda que chega baixa o estoque e marca os anúncios", async () => {
@@ -827,4 +845,65 @@ test("canal com mais de uma conta conectada", async (t) => {
       assert.equal(listing.connectionId, unica.id);
     });
   } finally { await db5.$disconnect(); }
+});
+
+test("mudança de título chega ao canal", async (t) => {
+  const db6 = new PrismaClient();
+  try {
+    const org = await db6.organization.create({ data: { name: "Título" } });
+    const admin = await db6.user.create({ data: {
+      organizationId: org.id, email: `admin-titulo-${Date.now()}@local.test`,
+      name: "Admin", passwordHash: "x", role: "ADMIN",
+    } });
+    const ator = { userId: admin.id, organizationId: org.id };
+    const canal = await db6.marketplace.create({
+      data: { organizationId: org.id, code: "sebo", name: "Sebo do título" },
+    });
+    await db6.marketplaceConnection.create({ data: {
+      marketplaceId: canal.id, provider: "SEBO_ONLINE",
+      externalAccountId: `loja-tit-${Date.now()}`, accessToken: "cifrado",
+    } });
+
+    const base = { sku: "TITULO-001", title: "Nome original", price: "10.00", stock: 3 };
+    const produto = await createProduct(db6, ator, base);
+    await requestPublication(db6, ator, produto.id, [canal.id]);
+
+    const publicar = async () => {
+      const enviados: string[] = [];
+      await syncListings(db6, async (l) => {
+        enviados.push(l.product.title);
+        return { externalListingId: "sebo-tit", price: l.product.price.toFixed(2), stock: l.product.stock };
+      }, 10, org.id);
+      return enviados;
+    };
+
+    await t.test("a primeira publicação envia o título original", async () => {
+      assert.deepEqual(await publicar(), ["Nome original"]);
+    });
+
+    await t.test("regressão: trocar só o título faz o anúncio ir ao canal de novo", async () => {
+      // Antes, a comparação olhava preço, estoque, imagens e categoria. O
+      // título mudado marcava o anúncio como pendente, o trabalhador o dava
+      // como em dia e desligava a marca sem chamar o provedor: o canal ficava
+      // com o nome velho para sempre, sem erro nenhum.
+      await updateProduct(db6, ator, produto.id, { ...base, title: "Nome novo" });
+      const pendente = await db6.listing.findFirstOrThrow({ where: { productId: produto.id } });
+      assert.equal(pendente.needsSync, true);
+
+      assert.deepEqual(await publicar(), ["Nome novo"]);
+      const depois = await db6.listing.findFirstOrThrow({ where: { productId: produto.id } });
+      assert.equal(depois.needsSync, false);
+    });
+
+    await t.test("e sem mudança nenhuma, não chama o provedor", async () => {
+      assert.deepEqual(await publicar(), []);
+    });
+
+    await t.test("descrição também é publicável", async () => {
+      await updateProduct(db6, ator, produto.id, {
+        ...base, title: "Nome novo", description: "Uma descrição nova",
+      });
+      assert.deepEqual(await publicar(), ["Nome novo"], "voltou ao provedor por causa da descrição");
+    });
+  } finally { await db6.$disconnect(); }
 });

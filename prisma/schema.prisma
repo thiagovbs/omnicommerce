@@ -368,51 +368,62 @@ model Product {
 /// perguntar ao provedor, e é o que faz a sincronização ser idempotente: o
 /// trabalhador manda o valor absoluto do produto, nunca uma diferença.
 model Listing {
-  id                  String        @id @default(cuid())
-  productId           String
-  marketplaceId       String
-  status              ListingStatus @default(DRAFT)
+  id                   String        @id @default(cuid())
+  productId            String
+  marketplaceId        String
+  status               ListingStatus @default(DRAFT)
   /// Em qual conta do provedor este anúncio é publicado.
   ///
   /// Um canal pode ter mais de uma conta conectada -- uma real e uma de teste,
   /// por exemplo. Sem registrar a escolha, a publicação caía num `findFirst`
   /// sem critério e podia ir para a conta errada sem aviso nenhum.
-  connectionId        String?
+  connectionId         String?
   /// Identificador do anúncio no provedor. Só existe depois de publicado.
-  externalListingId   String?
-  publishedPrice      Decimal?      @db.Decimal(14, 2)
-  publishedStock      Int?
-  /// Impressão do álbum que foi enviado ao provedor, na ordem.
+  externalListingId    String?
+  /// O estado do anúncio segundo o PROVEDOR, com as palavras dele.
   ///
-  /// Guardar a impressão, e não as URLs, porque uma imagem enviada é um data
-  /// URI de megabytes: repeti-lo aqui dobraria o armazenamento por anúncio.
-  /// Sem este campo, trocar só as imagens marcava o anúncio como pendente e o
-  /// trabalhador o considerava em dia -- preço e estoque não tinham mudado --
-  /// e as imagens novas nunca chegavam ao provedor.
-  publishedImagesHash String?
+  /// Não é o nosso `status`: o nosso diz se conseguimos entregar, o dele diz
+  /// se o anúncio está no ar. O Mercado Livre aceita a criação e devolve
+  /// `under_review` -- tratar isso como publicado faria a tela dizer que se
+  /// está vendendo quando o anúncio nem apareceu.
+  externalStatus       String?
+  publishedPrice       Decimal?      @db.Decimal(14, 2)
+  publishedStock       Int?
+  /// Impressão de TUDO que foi enviado ao provedor na última publicação.
+  ///
+  /// Uma impressão só, e não um campo por atributo, porque a comparação campo
+  /// a campo já divergiu duas vezes da lista do que se publica: primeiro as
+  /// imagens, depois o título. Nos dois casos o anúncio era marcado como
+  /// pendente, o trabalhador o considerava em dia e a mudança nunca chegava ao
+  /// provedor -- sem erro nenhum. Com a impressão, esquecer um campo é
+  /// impossível: ou ele entra no que se envia, ou não existe.
+  ///
+  /// Guarda a impressão e não os valores porque uma imagem enviada é um data
+  /// URI de megabytes.
+  publishedFingerprint String?
   /// Categoria escolhida neste canal, no identificador do provedor.
   ///
   /// Mora no anúncio porque é por canal: o mesmo produto pode ser "Livros" no
   /// Mercado Livre e outra coisa noutro marketplace. O campo livre `category`
   /// do produto continua existindo para quem não tem árvore de categorias.
-  categoryExternalId  String?
+  categoryExternalId   String?
   /// A categoria enviada ao provedor na última publicação.
-  publishedCategoryId String?
-  lastPublishedAt     DateTime?
+  publishedCategoryId  String?
+  lastPublishedAt      DateTime?
   /// Há trabalho a fazer neste anúncio. Ligada quando o produto muda ou quando
   /// se pede publicação; desligada quando o provedor confirma. Sem ela o
   /// trabalhador teria que varrer todo anúncio publicado a cada rodada só para
   /// descobrir que nada mudou.
-  needsSync           Boolean       @default(true)
+  needsSync            Boolean       @default(true)
   /// Quando tentar de novo depois de falhar. Backoff exponencial.
-  availableAt         DateTime      @default(now())
-  attempts            Int           @default(0)
-  lastError           String?
+  availableAt          DateTime      @default(now())
+  attempts             Int           @default(0)
+  lastError            String?
   /// Lease do trabalhador, no mesmo desenho do outbox de entrada.
-  leaseUntil          DateTime?
-  leaseToken          String?
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+  leaseUntil           DateTime?
+  leaseToken           String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
 
   product     Product                @relation(fields: [productId], references: [id], onDelete: Cascade)
   marketplace Marketplace            @relation(fields: [marketplaceId], references: [id], onDelete: Restrict)

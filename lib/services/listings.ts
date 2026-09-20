@@ -38,6 +38,8 @@ export interface PublishResult {
   externalListingId: string;
   price: string;
   stock: number;
+  /// Estado com as palavras do provedor. Ausente quando ele não reporta um.
+  externalStatus?: string | null;
 }
 
 export type ListingPublisher = (listing: ListingWithProduct) => Promise<PublishResult>;
@@ -153,29 +155,44 @@ export async function requestPublication(
   });
 }
 
-/// Impressão do álbum na ordem.
-///
-/// A lista é serializada em JSON antes do hash: com um separador qualquer,
-/// duas listas diferentes poderiam produzir a mesma string e, portanto, a
-/// mesma impressão. O JSON escapa o que precisa e não tem essa ambiguidade.
-export function hashAlbum(urls: string[]) {
-  return createHash("sha256").update(JSON.stringify(urls)).digest("hex");
+/**
+ * Impressão de tudo que vai para o provedor, na ordem em que vai.
+ *
+ * Uma impressão só, e não uma comparação campo a campo, porque a comparação
+ * já divergiu duas vezes da lista do que se publica: primeiro as imagens,
+ * depois o título. Nos dois casos o anúncio ficava pendente, o trabalhador o
+ * dava como em dia e a mudança nunca chegava ao canal, sem erro nenhum.
+ *
+ * Aqui entra o que o ADAPTER envia. Acrescentar um campo ao payload sem
+ * acrescentá-lo aqui reabre exatamente o mesmo defeito — por isso a lista é
+ * montada a partir do produto inteiro, e não de campos escolhidos a dedo.
+ *
+ * Serializado em JSON antes do hash: com um separador qualquer, duas listas
+ * diferentes poderiam produzir a mesma string.
+ */
+export function fingerprintDe(listing: ListingWithProduct) {
+  const p = listing.product;
+  return createHash("sha256").update(JSON.stringify([
+    p.title, p.description, p.category, p.brand, p.condition, p.active,
+    p.price.toFixed(2), p.currency, p.stock,
+    p.images.map((i) => i.url),
+    listing.categoryExternalId,
+  ])).digest("hex");
 }
 
 /**
- * Um anúncio publicado está em dia quando o que o provedor tem é o que o
- * produto diz hoje.
+ * Um anúncio publicado está em dia quando o que foi enviado é o que o produto
+ * diz hoje.
  *
- * Preço em Decimal, porque 10.00 e 10.0 são o mesmo preço. E o álbum entra na
- * comparação: sem ele, trocar só as imagens deixava o anúncio parecendo em dia
- * e elas nunca chegavam ao provedor.
+ * A comparação é contra o que ENVIAMOS, e não contra o que o provedor
+ * confirmou: se ele arredondar o preço ou limitar o estoque, comparar com a
+ * resposta dele deixaria o anúncio eternamente desatualizado, reenviando a
+ * cada rodada. `publishedPrice` e `publishedStock` continuam guardados, mas
+ * para mostrar na tela, não para decidir trabalho.
  */
 export function estaEmDia(listing: ListingWithProduct) {
   if (listing.status !== "PUBLISHED") return false;
-  if (listing.publishedStock !== listing.product.stock) return false;
-  if (listing.publishedImagesHash !== hashAlbum(listing.product.images.map((i) => i.url))) return false;
-  if (listing.publishedCategoryId !== listing.categoryExternalId) return false;
-  return listing.publishedPrice !== null && listing.publishedPrice.equals(listing.product.price);
+  return listing.publishedFingerprint === fingerprintDe(listing);
 }
 
 /**
@@ -251,11 +268,10 @@ export async function syncListings(
           // Preço e estoque vêm confirmados pelo provedor; do álbum guardamos
           // o que foi ENVIADO, porque nenhum provedor devolve as imagens que
           // aceitou. É a informação disponível, e a assimetria é declarada.
-          publishedImagesHash: hashAlbum(listing.product.images.map((i) => i.url)),
-          // Gravada mesmo em provedor que ignora categoria: o que importa é a
-          // comparação ficar coerente depois da primeira publicação, senão o
-          // anúncio pareceria desatualizado para sempre.
+          publishedFingerprint: fingerprintDe(listing),
+          // Informativo: diz qual categoria está de fato no canal.
           publishedCategoryId: listing.categoryExternalId,
+          externalStatus: resultado.externalStatus ?? null,
           lastPublishedAt: new Date(),
           needsSync: false, leaseUntil: null, leaseToken: null, lastError: null, attempts: 0,
         },

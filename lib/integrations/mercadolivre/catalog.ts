@@ -273,5 +273,8 @@ function lerResultado(corpo: Record<string, unknown>, idAnterior: string | null)
     externalListingId: String(id),
     price: corpo.price.toFixed(2),
     stock: corpo.available_quantity,
+    // O provedor aceita a criação e ainda assim pode devolver `under_review`:
+    // aceito não é o mesmo que no ar.
+    externalStatus: typeof corpo.status === "string" ? corpo.status : null,
   };
 }

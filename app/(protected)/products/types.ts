@@ -10,6 +10,8 @@ export interface ListingRow {
   categoryExternalId: string | null;
   /// Conta do provedor em que este anúncio está (ou vai) publicado.
   conta: string | null;
+  /// Estado do anúncio nas palavras do provedor. "active" é o que está no ar.
+  externalStatus: string | null;
   publishedPrice: string | null;
   publishedStock: number | null;
   lastPublishedAt: string | null;

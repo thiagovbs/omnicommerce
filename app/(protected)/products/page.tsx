@@ -38,6 +38,7 @@ export default async function ProductsPage() {
       externalListingId: l.externalListingId,
       categoryExternalId: l.categoryExternalId,
       conta: l.connection?.externalAccountId ?? null,
+      externalStatus: l.externalStatus,
       publishedPrice: l.publishedPrice ? l.publishedPrice.toFixed(2) : null,
       publishedStock: l.publishedStock,
       lastPublishedAt: l.lastPublishedAt ? l.lastPublishedAt.toISOString() : null,
