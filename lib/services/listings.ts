@@ -139,6 +139,7 @@ export function estaEmDia(listing: ListingWithProduct) {
   if (listing.status !== "PUBLISHED") return false;
   if (listing.publishedStock !== listing.product.stock) return false;
   if (listing.publishedImagesHash !== hashAlbum(listing.product.images.map((i) => i.url))) return false;
+  if (listing.publishedCategoryId !== listing.categoryExternalId) return false;
   return listing.publishedPrice !== null && listing.publishedPrice.equals(listing.product.price);
 }
 
@@ -216,6 +217,10 @@ export async function syncListings(
           // o que foi ENVIADO, porque nenhum provedor devolve as imagens que
           // aceitou. É a informação disponível, e a assimetria é declarada.
           publishedImagesHash: hashAlbum(listing.product.images.map((i) => i.url)),
+          // Gravada mesmo em provedor que ignora categoria: o que importa é a
+          // comparação ficar coerente depois da primeira publicação, senão o
+          // anúncio pareceria desatualizado para sempre.
+          publishedCategoryId: listing.categoryExternalId,
           lastPublishedAt: new Date(),
           needsSync: false, leaseUntil: null, leaseToken: null, lastError: null, attempts: 0,
         },

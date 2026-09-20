@@ -1,6 +1,6 @@
 import "server-only";
 import { objectInput, OrderError, textInput } from "../../domain/order-input";
-import { ProviderAuthError, ProviderTransientError } from "./client";
+import { API_ORIGIN, ProviderAuthError, ProviderTransientError } from "./client";
 
 /**
  * Árvore de categorias do Mercado Livre.
@@ -27,12 +27,6 @@ export interface CategoriaCrua {
   listingAllowed: boolean;
 }
 
-function base() {
-  const raw = process.env.MERCADO_LIVRE_API_URL ?? "https://api.mercadolibre.com";
-  const url = new URL(raw);
-  if (url.protocol !== "https:") throw new OrderError("MERCADO_LIVRE_API_URL inválida.");
-  return url.origin;
-}
 
 /**
  * Baixa e normaliza a árvore.
@@ -45,7 +39,7 @@ export async function fetchMercadoLivreCategories(
   token: string, site = SITE_PADRAO, fetcher: typeof fetch = fetch,
 ): Promise<(CategoriaCrua & { leaf: boolean })[]> {
   if (!/^[A-Z]{3}$/.test(site)) throw new OrderError("Site do Mercado Livre inválido.");
-  const response = await fetcher(`${base()}/sites/${site}/categories/all`, {
+  const response = await fetcher(`${API_ORIGIN}/sites/${site}/categories/all`, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
     redirect: "error",

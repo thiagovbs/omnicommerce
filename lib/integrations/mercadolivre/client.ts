@@ -2,7 +2,7 @@ import "server-only";
 import { OrderError } from "../../domain/order-input";
 
 // Host fixo: notificações nunca ditam para onde a aplicação faz a chamada.
-const API_ORIGIN = "https://api.mercadolibre.com";
+export const API_ORIGIN = "https://api.mercadolibre.com";
 
 /// Credencial recusada: exige reautorizar a conexão, não adianta repetir.
 export class ProviderAuthError extends Error {}

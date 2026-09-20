@@ -46,6 +46,9 @@ export function seboProductPayload(product: ProductWithImages) {
 export async function publishSeboProduct(
   token: string, product: ProductWithImages, fetcher: typeof fetch = fetch,
 ) {
+  // Serializado antes de enviar para o tamanho entrar na mensagem de erro: é a
+  // diferença entre "recusado por tamanho" e "recusado, não sei por quê".
+  const corpo = JSON.stringify(seboProductPayload(product));
   const response = await fetcher(`${seboApiBase()}/integration/products`, {
     method: "POST",
     headers: {
@@ -53,29 +56,37 @@ export async function publishSeboProduct(
       Accept: "application/json",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(seboProductPayload(product)),
+    body: corpo,
     redirect: "error",
     cache: "no-store",
     signal: AbortSignal.timeout(15000),
   });
   // Nenhuma mensagem de erro carrega token ou corpo da resposta.
   if (response.status === 401 || response.status === 403) throw new ProviderAuthError("SEBO_UNAUTHORIZED");
+  // Corpo grande demais tem causa e solução próprias, e quem recusa costuma
+  // ser o gateway, não o sebo. Sem separar, o operador leria "recusou o
+  // produto" e iria procurar defeito no cadastro.
+  if (response.status === 413) {
+    throw new OrderError(
+      `A publicação tem ${(corpo.length / 1024 / 1024).toFixed(1)} MB e foi recusada por tamanho. `
+      + "Use uma imagem principal menor.");
+  }
   if (response.status === 429 || response.status >= 500) throw new ProviderTransientError("SEBO_UNAVAILABLE");
   if (!response.ok) throw new OrderError("O Sebo On-Line recusou o produto.");
 
-  const corpo = objectInput(await response.json());
-  const id = corpo.id;
+  const resposta = objectInput(await response.json());
+  const id = resposta.id;
   if (typeof id !== "number" && typeof id !== "string") {
     throw new OrderError("Publicação no Sebo On-Line sem identificador.");
   }
   // O que volta é o que o sebo gravou, não o que pedimos: se ele arredondar o
   // preço, é o número dele que registramos como publicado.
-  if (typeof corpo.price !== "number" || typeof corpo.stock !== "number") {
+  if (typeof resposta.price !== "number" || typeof resposta.stock !== "number") {
     throw new OrderError("Publicação no Sebo On-Line sem preço ou estoque.");
   }
   return {
     externalListingId: String(id),
-    price: corpo.price.toFixed(2),
-    stock: corpo.stock,
+    price: resposta.price.toFixed(2),
+    stock: resposta.stock,
   };
 }

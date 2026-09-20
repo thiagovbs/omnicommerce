@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { OrderError } from "../domain/order-input";
 import { ListingPublisher } from "../services/listings";
 import { decryptSecret } from "./crypto";
+import { publishMercadoLivreListing } from "./mercadolivre/catalog";
 import { publishSeboProduct } from "./sebo/catalog";
 
 /**
@@ -29,10 +30,7 @@ export function providerPublisher(db: PrismaClient, fetcher: typeof fetch = fetc
       case "SEBO_ONLINE":
         return publishSeboProduct(decryptSecret(connection.accessToken), listing.product, fetcher);
       case "MERCADO_LIVRE":
-        // Publicar no MLB exige categoria folha, atributos obrigatórios por
-        // categoria, o motivo de GTIN vazio e imagem hospedada no provedor.
-        // Erro nomeado é melhor que um anúncio pela metade lá dentro.
-        throw new OrderError("Publicação no Mercado Livre ainda não implementada.");
+        return publishMercadoLivreListing(decryptSecret(connection.accessToken), listing, fetcher);
       case "SHOPEE":
         throw new OrderError("Publicação na Shopee ainda não implementada.");
     }
