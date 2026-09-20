@@ -54,7 +54,13 @@ function provedor(rotas: Record<string, { status?: number; corpo: unknown }>) {
     const chave = Object.keys(rotas).find((r) => url.includes(r));
     let corpoEnviado: unknown = null;
     if (typeof init.body === "string") corpoEnviado = JSON.parse(init.body);
-    else if (init.body instanceof FormData) corpoEnviado = "multipart";
+    else if (init.body instanceof FormData) {
+      const arquivo = init.body.get("file");
+      // O nome importa: é por ele que o provedor decide o formato.
+      corpoEnviado = arquivo instanceof File
+        ? { multipart: true, nome: arquivo.name, tipo: arquivo.type }
+        : { multipart: true };
+    }
     chamadas.push({ url, metodo: init.method ?? "GET", corpo: corpoEnviado });
     if (!chave) return new Response("{}", { status: 404 });
     const rota = rotas[chave];
@@ -112,7 +118,9 @@ test("publicação no Mercado Livre sem rede", async (t) => {
     // Só o data URI gerou envio: a URL externa não passa por upload.
     const uploads = chamadas.filter((c) => c.url.includes("/pictures/items/upload"));
     assert.equal(uploads.length, 1);
-    assert.equal(uploads[0].corpo, "multipart");
+    // O nome carrega a extensão: sem ela o provedor recusa com
+    // "The file type is not supported", medido contra a API real.
+    assert.deepEqual(uploads[0].corpo, { multipart: true, nome: "imagem.png", tipo: "image/png" });
   });
 
   await t.test("criação manda family_name e NÃO manda title", async () => {
@@ -211,5 +219,28 @@ test("publicação no Mercado Livre sem rede", async (t) => {
     });
     await assert.rejects(publishMercadoLivreListing("t", anuncio(), fetcher),
       (e: Error) => e instanceof OrderError && /sem preço ou estoque/.test(e.message));
+  });
+});
+
+test("formato de imagem que o Mercado Livre não aceita", async (t) => {
+  await t.test("regressão: o nome do arquivo leva a extensão do tipo", async () => {
+    const { fetcher, chamadas } = provedor({ "/pictures/items/upload": { corpo: { id: "F1" } } });
+    for (const [tipo, esperado] of [
+      ["image/png", "imagem.png"], ["image/jpeg", "imagem.jpg"],
+      ["image/webp", "imagem.webp"], ["image/gif", "imagem.gif"],
+    ]) {
+      await prepararFotos("t", [`data:${tipo};base64,QUJD`], fetcher);
+      const ultima = chamadas[chamadas.length - 1].corpo as { nome: string };
+      assert.equal(ultima.nome, esperado);
+    }
+  });
+
+  await t.test("AVIF é recusado por nós, nomeando o formato", async () => {
+    // O álbum aceita AVIF; o provedor não. Sem esta recusa, o erro viria dele
+    // como "file type is not supported", sem dizer qual imagem nem por quê.
+    const { fetcher } = provedor({ "/pictures/items/upload": { corpo: { id: "F1" } } });
+    await assert.rejects(
+      prepararFotos("t", ["data:image/avif;base64,QUJD"], fetcher),
+      (e: Error) => e instanceof OrderError && /AVIF/.test(e.message) && /PNG, JPEG, WEBP ou GIF/.test(e.message));
   });
 });

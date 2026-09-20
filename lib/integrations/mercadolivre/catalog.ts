@@ -31,6 +31,24 @@ const TIPO_DE_ANUNCIO = "gold_special";
 /// Teto do provedor por anúncio. O álbum já para em 10, mas o teto é dele.
 const MAX_FOTOS = 12;
 
+/**
+ * Extensão por tipo, para o nome do arquivo enviado.
+ *
+ * O provedor decide o formato pela EXTENSÃO DO NOME, não pelo content-type.
+ * Medido: o mesmo PNG sobe como "imagem.png" e é recusado como "imagem", com
+ * "The file type is not supported". E sobe como "foto.jpg" também, o que
+ * confirma que ele nem olha o conteúdo.
+ *
+ * AVIF fica de fora porque o provedor não o aceita -- o álbum aceita, e é por
+ * isso que a recusa precisa ser nossa, nomeando o formato.
+ */
+const EXTENSAO_POR_TIPO: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
 interface Atributo {
   id: string;
   value_id?: string;
@@ -145,9 +163,17 @@ export async function prepararFotos(
 
     const separador = url.indexOf(";base64,");
     const tipo = url.slice(5, separador);
+    const extensao = EXTENSAO_POR_TIPO[tipo];
+    if (!extensao) {
+      throw new OrderError(
+        `O Mercado Livre não aceita imagem ${tipo.replace("image/", "").toUpperCase()}. `
+        + "Use PNG, JPEG, WEBP ou GIF.");
+    }
     const binario = Buffer.from(url.slice(separador + 8), "base64");
     const form = new FormData();
-    form.append("file", new Blob([new Uint8Array(binario)], { type: tipo }), "imagem");
+    // O nome precisa carregar a extensão: é por ela que o provedor decide o
+    // formato, e sem ela a resposta é "file type is not supported".
+    form.append("file", new Blob([new Uint8Array(binario)], { type: tipo }), `imagem.${extensao}`);
 
     const response = await fetcher(`${API_ORIGIN}/pictures/items/upload`, {
       method: "POST",
