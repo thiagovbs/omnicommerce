@@ -47,6 +47,25 @@ export interface PublishResult {
   sentAttributes?: unknown;
 }
 
+/**
+ * Falha DEPOIS que o provedor já criou o anúncio.
+ *
+ * Publicar não é uma chamada só: o Mercado Livre cria o anúncio num recurso e
+ * guarda a descrição em outro. Quando o segundo passo falha, o anúncio JÁ
+ * existe lá, e deixar o erro subir puro perderia o identificador devolvido --
+ * a tentativa seguinte criaria um SEGUNDO anúncio no canal, e o primeiro
+ * ficaria órfão anunciando estoque que ninguém atualiza.
+ *
+ * Então o adapter embrulha a falha com o que já conseguiu: o trabalhador grava
+ * o identificador e trata a falha como qualquer outra. O que ele NÃO grava é a
+ * impressão, e é isso que mantém o anúncio pendente até a publicação terminar.
+ */
+export class PartialPublishError extends Error {
+  constructor(readonly resultado: PublishResult, readonly causa: unknown) {
+    super("PUBLICACAO_PARCIAL");
+  }
+}
+
 export type ListingPublisher = (listing: ListingWithProduct) => Promise<PublishResult>;
 
 /**
@@ -293,18 +312,38 @@ export async function syncListings(
         if (eraPublicado) atualizados++; else publicados++;
       }
     } catch (error) {
-      const permanente = error instanceof OrderError;
+      // Quando o anúncio já foi criado e um passo posterior falhou, o que o
+      // provedor devolveu é gravado junto da falha. Sem isso, a tentativa
+      // seguinte não teria identificador e criaria um anúncio duplicado.
+      const parcial = error instanceof PartialPublishError ? error : null;
+      const causa = parcial ? parcial.causa : error;
+      const permanente = causa instanceof OrderError;
       const tentativas = listing.attempts + 1;
       await db.listing.updateMany({
         where: { id: listing.id, leaseToken },
         data: {
+          ...(parcial
+            ? {
+              externalListingId: parcial.resultado.externalListingId,
+              publishedPrice: parcial.resultado.price,
+              publishedStock: parcial.resultado.stock,
+              publishedCategoryId: listing.categoryExternalId,
+              externalStatus: parcial.resultado.externalStatus ?? null,
+              ...(parcial.resultado.sentAttributes === undefined
+                ? {}
+                : { publishedAttributes: parcial.resultado.sentAttributes as Prisma.InputJsonValue }),
+              lastPublishedAt: new Date(),
+              // A impressão fica de fora de propósito: o anúncio existe, mas
+              // não está como o produto pede, e precisa continuar pendente.
+            }
+            : {}),
           // Erro de domínio não melhora com o tempo: desiste e espera correção.
           status: permanente || tentativas >= MAX_SYNC_ATTEMPTS ? "FAILED" : listing.status,
           needsSync: !(permanente || tentativas >= MAX_SYNC_ATTEMPTS),
           availableAt: new Date(Date.now() + Math.min(3600000, 1000 * 2 ** tentativas)),
           leaseUntil: null, leaseToken: null,
           // Só mensagem nossa: a do provedor pode carregar credencial ou corpo.
-          lastError: permanente ? (error as OrderError).message : "PUBLICACAO_FALHOU",
+          lastError: permanente ? (causa as OrderError).message : "PUBLICACAO_FALHOU",
         },
       });
       falhas++;

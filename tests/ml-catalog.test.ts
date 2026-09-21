@@ -6,6 +6,7 @@ import {
   condicaoDoProduto, montarAtributos, prepararFotos, publishMercadoLivreListing,
 } from "../lib/integrations/mercadolivre/catalog";
 import { ProviderAuthError, ProviderTransientError } from "../lib/integrations/mercadolivre/client";
+import { PartialPublishError } from "../lib/services/listings";
 import type { ListingWithProduct } from "../lib/services/listings";
 
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -47,11 +48,16 @@ function anuncio(over: Partial<ListingWithProduct> = {}, produtoOver = {}): List
   } as unknown as ListingWithProduct;
 }
 
-/// Dublê que responde por rota e registra o que foi enviado.
+/// Dublê que responde por rota e registra o que foi enviado. A chave pode
+/// levar o método antes da rota -- "POST /description" -- para quando a mesma
+/// URL responde diferente a cada verbo.
 function provedor(rotas: Record<string, { status?: number; corpo: unknown }>) {
   const chamadas: { url: string; metodo: string; corpo: unknown }[] = [];
   const fetcher = (async (url: string, init: RequestInit = {}) => {
-    const chave = Object.keys(rotas).find((r) => url.includes(r));
+    const chave = Object.keys(rotas).find((r) => {
+      const [metodo, rota] = r.includes(" ") ? r.split(" ") : ["", r];
+      return url.includes(rota) && (!metodo || metodo === (init.method ?? "GET"));
+    });
     let corpoEnviado: unknown = null;
     if (typeof init.body === "string") corpoEnviado = JSON.parse(init.body);
     else if (init.body instanceof FormData) {
@@ -284,5 +290,99 @@ test("aceito pelo provedor não é o mesmo que no ar", async (t) => {
     const resultado = await publishMercadoLivreListing(
       "t", anuncio({ externalListingId: "MLB123" }), fetcher);
     assert.equal(resultado.externalStatus, "active");
+  });
+});
+
+test("descrição do anúncio no Mercado Livre", async (t) => {
+  /// Rotas na ordem em que o dublê as procura: a descrição antes do anúncio,
+  /// porque a URL dela também contém "/items".
+  const rotasDeCriacao = (descricao: { status?: number; corpo: unknown }) => ({
+    "/description": descricao,
+    "/attributes": { corpo: ATRIBUTOS },
+    "/pictures/items/upload": { corpo: { id: "FOTO-1" } },
+    "/items": { corpo: { id: "MLB123", price: 42.5, available_quantity: 4 } },
+  });
+
+  await t.test("vai num recurso separado, e não no corpo da criação", async () => {
+    const { fetcher, chamadas } = provedor(rotasDeCriacao({ corpo: { id: "MLB123-desc" } }));
+    await publishMercadoLivreListing(
+      "t", anuncio({}, { description: "Caneca de porcelana, 300 ml." }), fetcher);
+
+    const criacao = chamadas.find((c) => c.metodo === "POST" && c.url.endsWith("/items"))!;
+    // Mandar `description` na criação não dá erro: o provedor ignora o campo.
+    // Foi exatamente assim que a descrição deixou de chegar ao canal.
+    assert.equal("description" in (criacao.corpo as Record<string, unknown>), false);
+
+    const descricao = chamadas.find((c) => c.url.endsWith("/description"))!;
+    assert.equal(descricao.url, "https://api.mercadolibre.com/items/MLB123/description");
+    assert.deepEqual(descricao.corpo, { plain_text: "Caneca de porcelana, 300 ml." });
+  });
+
+  await t.test("anúncio sem descrição ainda: o 404 do PUT autoriza o POST", async () => {
+    // O recurso só existe depois de criado: antes disso o PUT não acha nada.
+    const { fetcher, chamadas } = provedor({
+      "POST /description": { status: 201, corpo: { id: "MLB123-desc" } },
+      ...rotasDeCriacao({ status: 404, corpo: {} }),
+    });
+    await publishMercadoLivreListing("t", anuncio({}, { description: "Texto novo." }), fetcher);
+
+    const naDescricao = chamadas.filter((c) => c.url.endsWith("/description"));
+    assert.deepEqual(naDescricao.map((c) => c.metodo), ["PUT", "POST"]);
+    // O texto é o mesmo nas duas: a segunda chamada cria o que a primeira não
+    // encontrou, e não manda outra coisa.
+    assert.deepEqual(naDescricao[1].corpo, { plain_text: "Texto novo." });
+  });
+
+  await t.test("descrição vazia não gera chamada", async () => {
+    const { fetcher, chamadas } = provedor(rotasDeCriacao({ corpo: {} }));
+    await publishMercadoLivreListing("t", anuncio({}, { description: "   " }), fetcher);
+    // Não há texto para publicar, e uma recusa do provedor deixaria FALHO um
+    // anúncio que está no ar. O custo é declarado: apagar no catálogo não
+    // apaga no canal.
+    assert.equal(chamadas.some((c) => c.url.endsWith("/description")), false);
+  });
+
+  await t.test("a atualização reenvia a descrição junto de preço e estoque", async () => {
+    const { fetcher, chamadas } = provedor({
+      "/description": { corpo: {} },
+      "/items/MLB123": { corpo: { id: "MLB123", price: 39.9, available_quantity: 2 } },
+    });
+    await publishMercadoLivreListing(
+      "t", anuncio({ externalListingId: "MLB123" }, { description: "Texto revisado." }), fetcher);
+
+    const preco = chamadas.find((c) => c.url.endsWith("/items/MLB123"))!;
+    assert.deepEqual(Object.keys(preco.corpo as object).sort(), ["available_quantity", "price"]);
+    const descricao = chamadas.find((c) => c.url.endsWith("/description"))!;
+    assert.deepEqual(descricao.corpo, { plain_text: "Texto revisado." });
+  });
+
+  await t.test("falha na descrição não perde o anúncio já criado", async () => {
+    const { fetcher } = provedor(rotasDeCriacao({
+      status: 400, corpo: { cause: [{ message: "Description contains contact information" }] },
+    }));
+    await assert.rejects(
+      publishMercadoLivreListing("t", anuncio({}, { description: "Ligue 11 99999-9999" }), fetcher),
+      (e: Error) => {
+        // Sem o identificador aqui, a tentativa seguinte criaria um SEGUNDO
+        // anúncio no canal, e o primeiro ficaria órfão.
+        assert.equal(e instanceof PartialPublishError, true);
+        const parcial = e as PartialPublishError;
+        assert.equal(parcial.resultado.externalListingId, "MLB123");
+        assert.equal(parcial.resultado.price, "42.50");
+        assert.equal(Array.isArray(parcial.resultado.sentAttributes), true);
+        // A causa preserva a classificação: recusa de conteúdo é permanente, e
+        // o trabalhador precisa dela para não tentar oito vezes à toa.
+        assert.equal(parcial.causa instanceof OrderError, true);
+        assert.match((parcial.causa as OrderError).message, /contact information/);
+        return true;
+      });
+  });
+
+  await t.test("credencial vencida na descrição continua sendo credencial", async () => {
+    const { fetcher } = provedor(rotasDeCriacao({ status: 401, corpo: {} }));
+    await assert.rejects(
+      publishMercadoLivreListing("t", anuncio({}, { description: "Texto." }), fetcher),
+      (e: Error) => e instanceof PartialPublishError
+        && (e as PartialPublishError).causa instanceof ProviderAuthError);
   });
 });

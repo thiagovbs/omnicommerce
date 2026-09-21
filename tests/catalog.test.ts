@@ -7,7 +7,8 @@ import {
   createProduct, listProducts, setProductStock, updateProduct,
 } from "../lib/services/products";
 import {
-  estaEmDia, ListingPublisher, MAX_SYNC_ATTEMPTS, pushAposVenda, requestPublication, syncListings,
+  estaEmDia, ListingPublisher, MAX_SYNC_ATTEMPTS, PartialPublishError, pushAposVenda,
+  requestPublication, syncListings,
 } from "../lib/services/listings";
 import { applyIntegratedOrder } from "../lib/services/sales";
 import { parseIntegratedOrder } from "../lib/domain/order-input";
@@ -982,4 +983,92 @@ test("venda empurra o estoque aos canais na hora", async (t) => {
       assert.deepEqual(await pushAposVenda(db7, publicador, "nao-existe"), { empurrados: 0 });
     });
   } finally { await db7.$disconnect(); }
+});
+
+test("falha depois de o anúncio existir no provedor", async (t) => {
+  const db8 = new PrismaClient();
+  try {
+    const org = await db8.organization.create({ data: { name: "Parcial" } });
+    const admin = await db8.user.create({ data: {
+      organizationId: org.id, email: `admin-parcial-${Date.now()}@local.test`,
+      name: "Admin", passwordHash: "x", role: "ADMIN",
+    } });
+    const ator = { userId: admin.id, organizationId: org.id };
+    const canal = await db8.marketplace.create({
+      data: { organizationId: org.id, code: "mercado_livre", name: "ML parcial" },
+    });
+    await db8.marketplaceConnection.create({ data: {
+      marketplaceId: canal.id, provider: "MERCADO_LIVRE",
+      externalAccountId: `conta-parcial-${Date.now()}`, accessToken: "cifrado",
+    } });
+    const produto = await createProduct(db8, ator, {
+      sku: "PARCIAL-001", title: "Camiseta", description: "Ligue 11 99999-9999",
+      price: "79.90", stock: 5, brand: "Omnicommerce", images: ["https://exemplo.invalid/a.png"],
+    });
+    await requestPublication(db8, ator, produto.id, [canal.id]);
+
+    await t.test("o identificador é gravado junto da falha", async () => {
+      // O provedor criou o anúncio e recusou a descrição: é o caso em que
+      // deixar o erro subir puro perderia o identificador.
+      const resultado = await syncListings(db8, async (l) => {
+        throw new PartialPublishError(
+          { externalListingId: "MLB999", price: l.product.price.toFixed(2), stock: l.product.stock,
+            externalStatus: "active", sentAttributes: [{ id: "BRAND", value_name: "Omnicommerce" }] },
+          new OrderError("O Mercado Livre recusou a descrição do anúncio: contact information"));
+      }, 10, org.id);
+      assert.equal(resultado.falhas, 1);
+      assert.equal(resultado.publicados, 0, "não é publicação bem-sucedida");
+
+      const listing = await db8.listing.findFirstOrThrow({ where: { productId: produto.id } });
+      assert.equal(listing.externalListingId, "MLB999", "sem isto a próxima tentativa duplicaria");
+      assert.equal(listing.publishedPrice?.toFixed(2), "79.90");
+      assert.equal(listing.externalStatus, "active");
+      assert.deepEqual(listing.publishedAttributes, [{ id: "BRAND", value_name: "Omnicommerce" }]);
+      // Recusa de conteúdo não melhora com o tempo: desiste e espera correção,
+      // com a causa do provedor legível para quem vai corrigir.
+      assert.equal(listing.status, "FAILED");
+      assert.equal(listing.needsSync, false);
+      assert.match(listing.lastError ?? "", /descrição/);
+      // A impressão fica de fora: o anúncio existe, mas não está como o
+      // produto pede. Se fosse gravada, o anúncio passaria por em dia.
+      assert.equal(listing.publishedFingerprint, null);
+    });
+
+    await t.test("a tentativa seguinte atualiza o anúncio, não cria outro", async () => {
+      await requestPublication(db8, ator, produto.id, [canal.id]);
+      const recebidos: (string | null)[] = [];
+      await syncListings(db8, async (l) => {
+        recebidos.push(l.externalListingId);
+        return { externalListingId: l.externalListingId ?? "novo",
+                 price: l.product.price.toFixed(2), stock: l.product.stock };
+      }, 10, org.id);
+      // O adapter recebe o identificador e segue pelo caminho de atualização.
+      assert.deepEqual(recebidos, ["MLB999"]);
+      assert.equal(await db8.listing.count({ where: { productId: produto.id } }), 1);
+      const listing = await db8.listing.findFirstOrThrow({ where: { productId: produto.id } });
+      assert.equal(listing.status, "PUBLISHED");
+      assert.equal(listing.needsSync, false);
+      assert.notEqual(listing.publishedFingerprint, null);
+    });
+
+    await t.test("falha parcial transitória continua pendente, com o identificador", async () => {
+      const outro = await createProduct(db8, ator, {
+        sku: "PARCIAL-002", title: "Outra camiseta", description: "Texto",
+        price: "49.90", stock: 2, brand: "Omnicommerce", images: ["https://exemplo.invalid/b.png"],
+      });
+      await requestPublication(db8, ator, outro.id, [canal.id]);
+      await syncListings(db8, async (l) => {
+        throw new PartialPublishError(
+          { externalListingId: "MLB1000", price: l.product.price.toFixed(2), stock: l.product.stock },
+          new Error("rede caiu no meio"));
+      }, 10, org.id);
+
+      const listing = await db8.listing.findFirstOrThrow({ where: { productId: outro.id } });
+      assert.equal(listing.externalListingId, "MLB1000");
+      assert.equal(listing.needsSync, true, "transitório volta para a fila");
+      assert.equal(listing.status, "PUBLISHING");
+      assert.equal(listing.lastError, "PUBLICACAO_FALHOU");
+      assert.equal(listing.attempts, 1);
+    });
+  } finally { await db8.$disconnect(); }
 });

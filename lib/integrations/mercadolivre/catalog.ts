@@ -1,7 +1,7 @@
 import "server-only";
 import { objectInput, OrderError, textInput } from "../../domain/order-input";
 import { lerAtributos } from "../../services/listing-attributes";
-import { ListingWithProduct, PublishResult } from "../../services/listings";
+import { ListingWithProduct, PartialPublishError, PublishResult } from "../../services/listings";
 import { API_ORIGIN, ProviderAuthError, ProviderTransientError } from "./client";
 
 /**
@@ -24,6 +24,10 @@ import { API_ORIGIN, ProviderAuthError, ProviderTransientError } from "./client"
  *    referencia o id devolvido.
  * 5. ME2 é obrigatório para a conta de teste, o que bloqueia a publicação.
  *    Retirada em mãos contorna, e a tag `adoption_required` que sobra é aviso.
+ * 6. A descrição NÃO faz parte do anúncio: ela é um recurso separado, em
+ *    `/items/{id}/description`. Mandar `description` no corpo da criação não
+ *    dá erro -- o provedor ignora o campo --, e foi assim que a descrição do
+ *    catálogo deixou de chegar ao canal sem que nada acusasse.
  */
 
 /// O tipo de anúncio decide exposição e tarifa. Clássico é o que não exige
@@ -64,7 +68,14 @@ function cabecalhos(token: string) {
   };
 }
 
-async function tratar(response: Response, oQueFalhou: string) {
+/**
+ * Classifica a resposta sem consumir o corpo do sucesso.
+ *
+ * Separado da leitura porque nem toda chamada devolve JSON. A descrição é uma
+ * delas, e não pudemos medi-la: exigir corpo legível no sucesso transformaria
+ * em erro de formato uma resposta vazia perfeitamente boa.
+ */
+async function conferir(response: Response, oQueFalhou: string) {
   if (response.status === 401 || response.status === 403) throw new ProviderAuthError("ML_UNAUTHORIZED");
   if (response.status === 429 || response.status >= 500) throw new ProviderTransientError("ML_UNAVAILABLE");
   if (!response.ok) {
@@ -80,6 +91,10 @@ async function tratar(response: Response, oQueFalhou: string) {
     } catch { motivo = ""; }
     throw new OrderError(`${oQueFalhou}${motivo ? ": " + motivo.slice(0, 300) : "."}`);
   }
+}
+
+async function tratar(response: Response, oQueFalhou: string) {
+  await conferir(response, oQueFalhou);
   return objectInput(await response.json());
 }
 
@@ -215,6 +230,44 @@ export async function prepararFotos(
 }
 
 /**
+ * Envia a descrição, que o provedor guarda fora do anúncio.
+ *
+ * `PUT` substitui a descrição de um anúncio que já tem uma; onde não existe
+ * nenhuma, é o `POST` que cria. Qual dos dois vale depende de algo que não se
+ * sabe daqui -- se alguma publicação anterior chegou a gravar a descrição --,
+ * então o 404 do primeiro é o que autoriza o segundo. Não é palpite: é a única
+ * informação que distingue os dois casos.
+ *
+ * Diferente do resto deste arquivo, esta rota NÃO foi medida: ela exige
+ * credencial -- até o GET responde 403 sem token --, e o token desta aplicação
+ * vale 6 horas. O recurso, o verbo e o campo `plain_text` vêm da documentação
+ * do provedor, então é aqui que se olha primeiro se a descrição não chegar.
+ */
+async function enviarDescricao(
+  token: string, itemId: string, texto: string, fetcher: typeof fetch,
+) {
+  const enviar = (metodo: string) => fetcher(`${API_ORIGIN}/items/${itemId}/description`, {
+    method: metodo,
+    headers: cabecalhos(token),
+    body: JSON.stringify({ plain_text: texto }),
+    redirect: "error",
+    cache: "no-store",
+    signal: AbortSignal.timeout(30000),
+  });
+
+  const oQueFalhou = "O Mercado Livre recusou a descrição do anúncio";
+  const substituicao = await enviar("PUT");
+  if (substituicao.status === 404) {
+    // Descarta o corpo do 404 antes de criar: corpo não lido prende a conexão.
+    await substituicao.text().catch(() => "");
+    await conferir(await enviar("POST"), oQueFalhou);
+    return;
+  }
+  await conferir(substituicao, oQueFalhou);
+  await substituicao.text().catch(() => "");
+}
+
+/**
  * Cria ou atualiza o anúncio.
  *
  * A categoria só vai na criação: o provedor restringe trocá-la depois, e
@@ -242,6 +295,11 @@ export async function publishMercadoLivreListing(
       body: JSON.stringify({ price: preco, available_quantity: produto.stock }),
       redirect: "error", cache: "no-store", signal: AbortSignal.timeout(30000),
     }), "O Mercado Livre recusou a atualização do anúncio");
+    // Aqui a falha pode subir pura: o identificador já está gravado, e
+    // repetir a atualização não cria anúncio nenhum.
+    if (produto.description.trim()) {
+      await enviarDescricao(token, listing.externalListingId, produto.description, fetcher);
+    }
     return lerResultado(corpo, listing.externalListingId);
   }
 
@@ -275,7 +333,21 @@ export async function publishMercadoLivreListing(
 
   // Só na criação: a atualização manda preço e estoque, e devolver lista
   // vazia aqui apagaria o registro do que foi enviado antes.
-  return { ...lerResultado(corpo, null), sentAttributes: atributos };
+  const resultado = { ...lerResultado(corpo, null), sentAttributes: atributos };
+
+  // Descrição vazia não é enviada: não há texto para publicar, e uma recusa do
+  // provedor aqui deixaria FALHO um anúncio que está no ar. O custo é
+  // declarado: apagar a descrição no catálogo não apaga a que já está no canal.
+  if (produto.description.trim()) {
+    try {
+      await enviarDescricao(token, resultado.externalListingId, produto.description, fetcher);
+    } catch (erro) {
+      // O anúncio já existe lá com este identificador. Deixar o erro subir
+      // puro faria a tentativa seguinte criar um segundo anúncio.
+      throw new PartialPublishError(resultado, erro);
+    }
+  }
+  return resultado;
 }
 
 /// O provedor só conhece três condições; o catálogo aceita texto livre.
