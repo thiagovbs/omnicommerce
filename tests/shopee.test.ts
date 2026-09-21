@@ -23,13 +23,18 @@ const PARTNER_ID = "2000123";
 const PARTNER_KEY = "chave-de-teste-da-shopee";
 const PNG = "data:image/png;base64,QUJD";
 
+// No ambiente sobra o endereço público deste deploy, que é da INSTALAÇÃO. O
+// partner é da organização e chega como objeto -- é o que permite duas
+// organizações, cada uma com a aplicação dela, no mesmo processo.
 const ambiente = {
-  SHOPEE_PARTNER_ID: PARTNER_ID,
-  SHOPEE_PARTNER_KEY: PARTNER_KEY,
-  SHOPEE_SANDBOX: "true",
-  SHOPEE_HOST: undefined,
-  SHOPEE_DEFAULT_WEIGHT_KG: undefined,
   APP_URL: "https://omnicommerce.vercel.app",
+};
+
+/// Configuração do canal da Shopee, como o banco a devolve.
+const cfgShopee: Record<string, string> = {
+  partnerId: PARTNER_ID,
+  partnerKey: PARTNER_KEY,
+  sandbox: "true",
 };
 
 function comAmbiente<T>(vars: Record<string, string | undefined>, corpo: () => T): T {
@@ -131,7 +136,7 @@ const parametro = (url: string, nome: string) => new URL(url).searchParams.get(n
 test("assinatura da Shopee", async (t) => {
   await t.test("a base é partner_id + caminho + timestamp, nessa ordem", () => {
     comAmbiente(ambiente, () => {
-      const config = shopeeConfig();
+      const config = shopeeConfig(cfgShopee);
       const caminho = "/api/v2/product/add_item";
       // A base é escrita à mão aqui de propósito: é ELA que o teste protege.
       // Um campo fora de ordem produz assinatura válida em forma e errada em
@@ -144,7 +149,7 @@ test("assinatura da Shopee", async (t) => {
 
   await t.test("chamada de loja acrescenta token e shop_id, depois do timestamp", () => {
     comAmbiente(ambiente, () => {
-      const config = shopeeConfig();
+      const config = shopeeConfig(cfgShopee);
       const caminho = "/api/v2/order/get_order_detail";
       const esperada = createHmac("sha256", PARTNER_KEY)
         .update(`${PARTNER_ID}${caminho}1700000000${loja.accessToken}${loja.shopId}`).digest("hex");
@@ -158,7 +163,7 @@ test("assinatura da Shopee", async (t) => {
 
   await t.test("trocar a ordem de token e loja muda a assinatura", () => {
     comAmbiente(ambiente, () => {
-      const config = shopeeConfig();
+      const config = shopeeConfig(cfgShopee);
       const certa = assinarShopee(config, "/x", 1, { accessToken: "a", shopId: "b" });
       const trocada = assinarShopee(config, "/x", 1, { accessToken: "b", shopId: "a" });
       assert.notEqual(certa, trocada);
@@ -166,23 +171,23 @@ test("assinatura da Shopee", async (t) => {
   });
 
   await t.test("configuração ausente ou inválida é nomeada", () => {
-    comAmbiente({ ...ambiente, SHOPEE_PARTNER_ID: undefined }, () => {
-      assert.equal(shopeeConfigured(), false);
-      assert.throws(() => shopeeConfig(), /SHOPEE_PARTNER_ID/);
-    });
-    comAmbiente({ ...ambiente, SHOPEE_PARTNER_ID: "abc" }, () => {
-      assert.throws(() => shopeeConfig(), /numérico/);
+    comAmbiente(ambiente, () => {
+      assert.equal(shopeeConfigured({ ...cfgShopee, partnerKey: "" }), false);
+      // Nomeia o CAMPO da tela, não a variável de ambiente.
+      assert.throws(() => shopeeConfig({ ...cfgShopee, partnerId: "" }), /Partner ID/);
+      assert.throws(() => shopeeConfig({ ...cfgShopee, partnerId: "abc" }), /numérico/);
     });
   });
 
   await t.test("sandbox e produção são hosts diferentes", () => {
     comAmbiente(ambiente, () => {
-      assert.equal(shopeeConfig().sandbox, true);
-      assert.match(shopeeConfig().host, /test-stable/);
+      assert.equal(shopeeConfig(cfgShopee).sandbox, true);
+      assert.match(shopeeConfig(cfgShopee).host, /test-stable/);
     });
-    comAmbiente({ ...ambiente, SHOPEE_SANDBOX: "false" }, () => {
-      assert.equal(shopeeConfig().sandbox, false);
-      assert.equal(shopeeConfig().host, "https://partner.shopeemobile.com");
+    comAmbiente(ambiente, () => {
+      const producao = { ...cfgShopee, sandbox: "false" };
+      assert.equal(shopeeConfig(producao).sandbox, false);
+      assert.equal(shopeeConfig(producao).host, "https://partner.shopeemobile.com");
     });
   });
 });
@@ -195,7 +200,7 @@ test("erro da Shopee vem dentro de HTTP 200", async (t) => {
       });
       // Tratar response.ok como sucesso faria toda falha de credencial passar
       // por pedido consultado -- este é o teste que impede isso.
-      await assert.rejects(fetchShopeeOrder(loja, "2001", fetcher),
+      await assert.rejects(fetchShopeeOrder(cfgShopee, loja, "2001", fetcher),
         (e: Error) => e instanceof ProviderAuthError);
     });
   });
@@ -205,7 +210,7 @@ test("erro da Shopee vem dentro de HTTP 200", async (t) => {
       const { fetcher } = provedor({
         "/order/get_order_detail": { corpo: { error: "error_server" } },
       });
-      await assert.rejects(fetchShopeeOrder(loja, "2001", fetcher),
+      await assert.rejects(fetchShopeeOrder(cfgShopee, loja, "2001", fetcher),
         (e: Error) => e instanceof ProviderTransientError);
     });
   });
@@ -216,7 +221,7 @@ test("erro da Shopee vem dentro de HTTP 200", async (t) => {
         ...criacao,
         "/product/add_item": { corpo: { error: "error_param", message: "category_id is invalid" } },
       });
-      await assert.rejects(publishShopeeListing(loja, anuncio(), fetcher),
+      await assert.rejects(publishShopeeListing(cfgShopee, loja, anuncio(), fetcher),
         (e: Error) => e instanceof OrderError && /category_id is invalid/.test(e.message));
     });
   });
@@ -224,7 +229,7 @@ test("erro da Shopee vem dentro de HTTP 200", async (t) => {
   await t.test("sucesso sem conteúdo é recusado em vez de virar vazio", async () => {
     await comAmbiente(ambiente, async () => {
       const { fetcher } = provedor({ "/order/get_order_detail": { corpo: { error: "" } } });
-      await assert.rejects(fetchShopeeOrder(loja, "2001", fetcher),
+      await assert.rejects(fetchShopeeOrder(cfgShopee, loja, "2001", fetcher),
         (e: Error) => e instanceof OrderError && /sem conteúdo/.test(e.message));
     });
   });
@@ -233,7 +238,7 @@ test("erro da Shopee vem dentro de HTTP 200", async (t) => {
 test("autorização de loja na Shopee", async (t) => {
   await t.test("o link leva partner_id, sign e o nonce no caminho do retorno", () => {
     comAmbiente(ambiente, () => {
-      const url = shopeeAuthorizationUrl("nonce-123");
+      const url = shopeeAuthorizationUrl(cfgShopee, "nonce-123");
       assert.equal(parametro(url, "partner_id"), PARTNER_ID);
       assert.match(url, /test-stable/);
       assert.ok(parametro(url, "sign"));
@@ -267,7 +272,7 @@ test("autorização de loja na Shopee", async (t) => {
           },
         },
       });
-      const tokens = await exchangeShopeeCode("codigo", "77001", fetcher);
+      const tokens = await exchangeShopeeCode(cfgShopee, "codigo", "77001", fetcher);
       assert.equal(tokens.accessToken, "token-novo");
       assert.equal(tokens.refreshToken, "refresh-novo");
       // O shop_id NÃO sai da resposta: ele vem do retorno do provedor e é o
@@ -287,7 +292,7 @@ test("autorização de loja na Shopee", async (t) => {
           corpo: { error: "", access_token: "t2", refresh_token: "r2", expire_in: 14400 },
         },
       });
-      const tokens = await refreshShopeeToken("r1", "77001", fetcher);
+      const tokens = await refreshShopeeToken(cfgShopee, "r1", "77001", fetcher);
       assert.equal(tokens.refreshToken, "r2", "sem isto, 365 dias de autorização viram 30");
     });
   });
@@ -297,7 +302,7 @@ test("publicação na Shopee", async (t) => {
   await t.test("a criação leva categoria, estoque de vendedor, logística e imagem", async () => {
     await comAmbiente(ambiente, async () => {
       const { fetcher, chamadas } = provedor(criacao);
-      const resultado = await publishShopeeListing(loja, anuncio(), fetcher);
+      const resultado = await publishShopeeListing(cfgShopee, loja, anuncio(), fetcher);
       assert.equal(resultado.externalListingId, "550011");
       assert.equal(resultado.price, "79.90");
       assert.equal(resultado.stock, 5);
@@ -328,7 +333,7 @@ test("publicação na Shopee", async (t) => {
           corpo: { error: "", response: { logistics_channel_list: [{ logistics_channel_id: 1, enabled: false }] } },
         },
       });
-      await assert.rejects(publishShopeeListing(loja, anuncio(), fetcher),
+      await assert.rejects(publishShopeeListing(cfgShopee, loja, anuncio(), fetcher),
         (e: Error) => e instanceof OrderError && /Seller Center/.test(e.message));
     });
   });
@@ -337,7 +342,7 @@ test("publicação na Shopee", async (t) => {
     await comAmbiente(ambiente, async () => {
       const { fetcher } = provedor(criacao);
       await assert.rejects(
-        prepararImagensShopee(loja, ["https://exemplo.invalid/a.png"], fetcher),
+        prepararImagensShopee(cfgShopee, loja, ["https://exemplo.invalid/a.png"], fetcher),
         (e: Error) => e instanceof OrderError && /enviada como arquivo/.test(e.message));
     });
   });
@@ -345,7 +350,7 @@ test("publicação na Shopee", async (t) => {
   await t.test("o arquivo sobe com extensão no nome", async () => {
     await comAmbiente(ambiente, async () => {
       const { fetcher, chamadas } = provedor(criacao);
-      await prepararImagensShopee(loja, [PNG], fetcher);
+      await prepararImagensShopee(cfgShopee, loja, [PNG], fetcher);
       const upload = chamadas.find((c) => c.url.includes("/media_space/upload_image"))!;
       assert.deepEqual(upload.corpo, { multipart: true, nome: "imagem.png", tipo: "image/png" });
     });
@@ -354,7 +359,7 @@ test("publicação na Shopee", async (t) => {
   await t.test("formato que a Shopee não aceita é recusado nomeando o formato", async () => {
     await comAmbiente(ambiente, async () => {
       const { fetcher } = provedor(criacao);
-      await assert.rejects(prepararImagensShopee(loja, ["data:image/gif;base64,QUJD"], fetcher),
+      await assert.rejects(prepararImagensShopee(cfgShopee, loja, ["data:image/gif;base64,QUJD"], fetcher),
         (e: Error) => e instanceof OrderError && /GIF/.test(e.message));
     });
   });
@@ -363,7 +368,7 @@ test("publicação na Shopee", async (t) => {
     await comAmbiente(ambiente, async () => {
       const { fetcher } = provedor(criacao);
       await assert.rejects(
-        publishShopeeListing(loja, anuncio({ categoryExternalId: null }), fetcher),
+        publishShopeeListing(cfgShopee, loja, anuncio({ categoryExternalId: null }), fetcher),
         (e: Error) => e instanceof OrderError && /aba Categoria/.test(e.message));
     });
   });
@@ -382,7 +387,7 @@ test("publicação na Shopee", async (t) => {
         externalListingId: "550011",
         publishedAttributes: { conteudo: "impressao-antiga", imagens: ["img-1"] },
       });
-      await publishShopeeListing(loja, publicado, fetcher);
+      await publishShopeeListing(cfgShopee, loja, publicado, fetcher);
 
       const preco = chamadas.find((c) => c.url.includes("/product/update_price"))!;
       assert.deepEqual(preco.corpo, { item_id: 550011, price_list: [{ original_price: 79.9 }] });
@@ -402,7 +407,7 @@ test("publicação na Shopee", async (t) => {
         externalListingId: "550011",
         publishedAttributes: { conteudo: impressaoDeConteudo(listing), imagens: ["img-1"] },
       });
-      const resultado = await publishShopeeListing(loja, comMemoria, fetcher);
+      const resultado = await publishShopeeListing(cfgShopee, loja, comMemoria, fetcher);
 
       assert.equal(chamadas.some((c) => c.url.includes("/product/update_item")), false);
       assert.equal(chamadas.some((c) => c.url.includes("/media_space/upload_image")), false,
@@ -421,7 +426,7 @@ test("publicação na Shopee", async (t) => {
         externalListingId: "550011",
         publishedAttributes: { conteudo: "outra-impressao", imagens: ["img-antiga"] },
       });
-      const resultado = await publishShopeeListing(loja, listing, fetcher);
+      const resultado = await publishShopeeListing(cfgShopee, loja, listing, fetcher);
 
       const item = chamadas.find((c) => c.url.includes("/product/update_item"))!;
       const corpo = item.corpo as Record<string, unknown>;
@@ -443,7 +448,7 @@ test("publicação na Shopee", async (t) => {
         externalListingId: "550011",
         publishedAttributes: { conteudo: "outra", imagens: [] },
       });
-      await assert.rejects(publishShopeeListing(loja, listing, fetcher), (e: Error) => {
+      await assert.rejects(publishShopeeListing(cfgShopee, loja, listing, fetcher), (e: Error) => {
         assert.equal(e instanceof PartialPublishError, true);
         const parcial = e as PartialPublishError;
         assert.equal(parcial.resultado.externalListingId, "550011");
@@ -457,7 +462,7 @@ test("publicação na Shopee", async (t) => {
   await t.test("produto desativado vira anúncio fora do ar, não anúncio apagado", async () => {
     await comAmbiente(ambiente, async () => {
       const { fetcher, chamadas } = provedor(criacao);
-      await publishShopeeListing(loja, anuncio({}, { active: false }), fetcher);
+      await publishShopeeListing(cfgShopee, loja, anuncio({}, { active: false }), fetcher);
       const corpo = chamadas.find((c) => c.url.includes("/product/add_item"))!
         .corpo as Record<string, unknown>;
       assert.equal(corpo.item_status, "UNLIST");
@@ -547,7 +552,7 @@ test("pedido da Shopee", async (t) => {
       const { fetcher, chamadas } = provedor({
         "/order/get_order_detail": { corpo: { error: "", response: { order_list: [pedido] } } },
       });
-      await fetchShopeeOrder(loja, "2601ABCD1234", fetcher);
+      await fetchShopeeOrder(cfgShopee, loja, "2601ABCD1234", fetcher);
       const url = chamadas[0].url;
       assert.equal(parametro(url, "order_sn_list"), "2601ABCD1234");
       assert.match(parametro(url, "response_optional_fields") ?? "", /item_list/);
@@ -577,7 +582,7 @@ test("pedido da Shopee", async (t) => {
         return new Response(JSON.stringify(corpo), { status: 200 });
       }) as unknown as typeof fetch;
 
-      const alterados = await listChangedShopeeOrders(loja, new Date(1758000000 * 1000), fetcher);
+      const alterados = await listChangedShopeeOrders(cfgShopee, loja, new Date(1758000000 * 1000), fetcher);
       assert.deepEqual(alterados.map((a) => a.externalOrderId), ["A", "B"]);
       assert.equal(pagina, 2);
     });
@@ -613,12 +618,12 @@ test("aviso (push) da Shopee", async (t) => {
       const url = "https://omnicommerce.vercel.app/api/webhooks/shopee/abc";
       const cru = '{"code":3,"shop_id":77001}';
       const assinatura = createHmac("sha256", PARTNER_KEY).update(url + cru).digest("hex");
-      assert.equal(assinaturaDePushValida(url, cru, assinatura), true);
+      assert.equal(assinaturaDePushValida(cfgShopee, url, cru, assinatura), true);
       // Reserializar o JSON reordena chaves e muda espaços: a assinatura passa
       // a não bater por um motivo que não aparece em lugar nenhum.
       assert.equal(
-        assinaturaDePushValida(url, '{ "code": 3, "shop_id": 77001 }', assinatura), false);
-      assert.equal(assinaturaDePushValida(url, cru, "mentira"), false);
+        assinaturaDePushValida(cfgShopee, url, '{ "code": 3, "shop_id": 77001 }', assinatura), false);
+      assert.equal(assinaturaDePushValida(cfgShopee, url, cru, "mentira"), false);
     });
   });
 });

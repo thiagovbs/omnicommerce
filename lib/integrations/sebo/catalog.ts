@@ -44,12 +44,13 @@ export function seboProductPayload(product: ProductWithImages) {
 }
 
 export async function publishSeboProduct(
-  token: string, product: ProductWithImages, fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, token: string, product: ProductWithImages,
+  fetcher: typeof fetch = fetch,
 ) {
   // Serializado antes de enviar para o tamanho entrar na mensagem de erro: é a
   // diferença entre "recusado por tamanho" e "recusado, não sei por quê".
   const corpo = JSON.stringify(seboProductPayload(product));
-  const response = await fetcher(`${seboApiBase()}/integration/products`, {
+  const response = await fetcher(`${seboApiBase(cfg)}/integration/products`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,

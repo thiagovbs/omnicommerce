@@ -8,7 +8,7 @@ export const maxDuration = 60;
 
 // Mesma autenticação do dispatcher: agendador externo com o CRON_SECRET.
 export async function POST(request: Request) {
-  return handleDispatchJob(request, () => reconcileAll(prisma, providerLister()));
+  return handleDispatchJob(request, () => reconcileAll(prisma, providerLister(prisma)));
 }
 
 export async function GET(request: Request) { return POST(request); }

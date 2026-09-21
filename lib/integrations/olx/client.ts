@@ -28,12 +28,13 @@ const LIMITE_CORPO_BYTES = 1024 * 1024;
 
 export class OlxConfigurationError extends Error {}
 
-export function olxApiBase() {
-  const bruto = (process.env.OLX_API_URL ?? BASE_PADRAO).replace(/\/+$/, "");
+/// Base do autoupload, vinda do cadastro do canal (era `OLX_API_URL`).
+export function olxApiBase(cfg: Record<string, string>) {
+  const bruto = (cfg.apiUrl || BASE_PADRAO).replace(/\/+$/, "");
   let url: URL;
-  try { url = new URL(bruto); } catch { throw new OlxConfigurationError("OLX_API_URL inválida."); }
+  try { url = new URL(bruto); } catch { throw new OlxConfigurationError("URL da API da OLX inválida."); }
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
-    throw new OlxConfigurationError("OLX_API_URL inválida.");
+    throw new OlxConfigurationError("URL da API da OLX inválida.");
   }
   return url.origin + url.pathname.replace(/\/+$/, "");
 }
@@ -115,7 +116,8 @@ function conferirStatusCode(corpo: Record<string, unknown>, oQueFalhou: string) 
  * modelo de estado desejado funcionar aqui.
  */
 export async function importarAnunciosOlx(
-  token: string, anuncios: unknown[], fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, token: string, anuncios: unknown[],
+  fetcher: typeof fetch = fetch,
 ): Promise<OlxImportResult> {
   if (!anuncios.length) throw new OrderError("Nenhum anúncio para enviar à OLX.");
   const corpo = JSON.stringify({ access_token: token, ad_list: anuncios });
@@ -128,7 +130,7 @@ export async function importarAnunciosOlx(
       + " Use imagens por URL, e não arquivos embutidos.");
   }
 
-  const response = await fetcher(`${olxApiBase()}/autoupload/import`, {
+  const response = await fetcher(`${olxApiBase(cfg)}/autoupload/import`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: corpo,
@@ -157,12 +159,12 @@ export interface OlxAdStatus {
  * credencial no corpo. Quem decidiu isso foi a OLX.
  */
 export async function consultarImportacaoOlx(
-  token: string, importacao: string, fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, token: string, importacao: string, fetcher: typeof fetch = fetch,
 ) {
   const id = textInput(importacao, "Token da importação", 200);
   if (!/^[A-Za-z0-9._~-]+$/.test(id)) throw new OrderError("Token da importação inválido.");
 
-  const response = await fetcher(`${olxApiBase()}/autoupload/import/${encodeURIComponent(id)}`, {
+  const response = await fetcher(`${olxApiBase(cfg)}/autoupload/import/${encodeURIComponent(id)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ access_token: token }),

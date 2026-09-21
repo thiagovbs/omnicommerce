@@ -38,14 +38,30 @@ function comAmbiente<T>(vars: Record<string, string | undefined>, corpo: () => T
   return resultado;
 }
 
+// Sobrou no ambiente só o que é da INSTALAÇÃO: o endereço público deste
+// deploy e a chave do cofre. As credenciais da aplicação são do canal, e
+// chegam como objeto -- é o que permite duas organizações, cada uma com a
+// aplicação dela, no mesmo processo.
 const configurado = {
-  MERCADO_LIVRE_APP_ID: "123456",
-  MERCADO_LIVRE_APP_SECRET: "segredo-da-aplicacao",
   APP_URL: APP,
-  MERCADO_LIVRE_AUTH_URL: undefined,
-  MERCADO_LIVRE_SCOPE: undefined,
-  MERCADO_LIVRE_TOKEN_URL: undefined,
   INTEGRATION_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
+};
+
+/// Configuração do canal, como o banco a devolve.
+const cred = {
+  appId: "123456",
+  appSecret: "segredo-da-aplicacao",
+};
+
+/// A renovação vai ao banco buscar a aplicação DO CANAL -- é ela que assina a
+/// renovação. Antes isso vinha do ambiente, igual para todas as organizações.
+const configDoCanal = {
+  marketplaceSetting: {
+    findMany: async () => [
+      { key: "appId", value: cred.appId, secret: false },
+      { key: "appSecret", value: cred.appSecret, secret: false },
+    ],
+  },
 };
 
 const tokenBody = {
@@ -74,11 +90,17 @@ const pedidoValido = {
 
 test("OAuth do Mercado Livre sem rede", async (t) => {
   await t.test("configuração ausente nomeia a variável", () => {
-    comAmbiente({ ...configurado, MERCADO_LIVRE_APP_SECRET: undefined }, () => {
-      assert.throws(() => oauthConfig(), /MERCADO_LIVRE_APP_SECRET/);
+    comAmbiente(configurado, () => {
+      // A mensagem nomeia o CAMPO da tela, não a variável de ambiente: quem
+      // administra a organização não tem acesso ao ambiente.
+      assert.throws(() => oauthConfig({ ...cred, appSecret: undefined }), /App Secret/);
+      assert.throws(() => oauthConfig({}), /App ID, App Secret/);
+      assert.throws(() => oauthConfig({ appId: "123456" }), /Marketplaces/,
+        "a mensagem diz ONDE preencher");
     });
-    comAmbiente({ ...configurado, MERCADO_LIVRE_APP_ID: undefined, APP_URL: undefined }, () => {
-      assert.throws(() => oauthConfig(), /MERCADO_LIVRE_APP_ID, APP_URL/);
+    // APP_URL continua sendo do deploy, e a falta dela é falha de instalação.
+    comAmbiente({ ...configurado, APP_URL: undefined }, () => {
+      assert.throws(() => oauthConfig(cred), /APP_URL/);
     });
   });
 
@@ -89,8 +111,8 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
       "https://auth.mercadolivre.com.br.evil.com/x",
       "nao-e-url",
     ]) {
-      comAmbiente({ ...configurado, MERCADO_LIVRE_AUTH_URL: ruim }, () => {
-        assert.throws(() => oauthConfig(), OAuthConfigurationError);
+      comAmbiente(configurado, () => {
+        assert.throws(() => oauthConfig({ ...cred, authUrl: ruim }), OAuthConfigurationError);
       });
     }
     // Variações legítimas do domínio continuam válidas.
@@ -98,16 +120,16 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
       "https://auth.mercadolivre.com.br/authorization",
       "https://auth.mercadolibre.com.ar/authorization",
     ]) {
-      comAmbiente({ ...configurado, MERCADO_LIVRE_AUTH_URL: bom }, () => {
-        assert.equal(oauthConfig().authBase, bom);
+      comAmbiente(configurado, () => {
+        assert.equal(oauthConfig({ ...cred, authUrl: bom }).authBase, bom);
       });
     }
   });
 
   await t.test("redirect_uri é derivado do APP_URL, não configurado à parte", () => {
     comAmbiente(configurado, () => {
-      assert.equal(oauthConfig().redirectUri, `${APP}/api/integrations/mercadolivre/callback`);
-      const url = new URL(authorizationUrl("nonce-abc"));
+      assert.equal(oauthConfig(cred).redirectUri, `${APP}/api/integrations/mercadolivre/callback`);
+      const url = new URL(authorizationUrl("nonce-abc", cred));
       assert.equal(url.origin + url.pathname, "https://auth.mercadolivre.com.br/authorization");
       assert.equal(url.searchParams.get("response_type"), "code");
       assert.equal(url.searchParams.get("client_id"), "123456");
@@ -119,18 +141,24 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
   });
 
   await t.test("escopo só é enviado quando configurado explicitamente", () => {
-    comAmbiente({ ...configurado, MERCADO_LIVRE_SCOPE: "offline_access" }, () => {
-      assert.equal(new URL(authorizationUrl("n")).searchParams.get("scope"), "offline_access");
-    });
-    comAmbiente({ ...configurado, MERCADO_LIVRE_SCOPE: "" }, () => {
-      assert.equal(new URL(authorizationUrl("n")).searchParams.has("scope"), false);
+    comAmbiente(configurado, () => {
+      assert.equal(
+        new URL(authorizationUrl("n", { ...cred, scope: "offline_access" }))
+          .searchParams.get("scope"),
+        "offline_access");
+      // Escopo vazio é diferente de ausente: ausente usa o padrão (que inclui
+      // offline_access), vazio manda a autorização sem escopo -- que é como se
+      // reaproveita um consentimento já dado.
+      assert.equal(
+        new URL(authorizationUrl("n", { ...cred, scope: "" })).searchParams.has("scope"),
+        false);
     });
   });
 
   await t.test("troca do código envia formulário e devolve o vendedor", async () => {
     await comAmbiente(configurado, async () => {
       let visto: { url: string; corpo: string; tipo: string | null } | null = null;
-      const tokens = await exchangeCode("TG-codigo", async (input, init) => {
+      const tokens = await exchangeCode("TG-codigo", cred, async (input, init) => {
         visto = {
           url: String(input),
           corpo: String(init?.body),
@@ -153,7 +181,7 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
   await t.test("renovação usa grant_type de refresh", async () => {
     await comAmbiente(configurado, async () => {
       let corpo = "";
-      await refreshToken("TG-antigo", async (_input, init) => {
+      await refreshToken("TG-antigo", cred, async (_input, init) => {
         corpo = String(init?.body);
         return Response.json(tokenBody);
       });
@@ -166,14 +194,14 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
   await t.test("resposta incompleta e erros são classificados, sem vazar segredo", async () => {
     await comAmbiente(configurado, async () => {
       // Sem user_id não há como saber de qual vendedor é a conexão.
-      await assert.rejects(exchangeCode("x", async () => Response.json({ access_token: "a" })), /user_id/);
-      await assert.rejects(exchangeCode("x", async () => Response.json({ user_id: 1 })), /access_token/);
+      await assert.rejects(exchangeCode("x", cred, async () => Response.json({ access_token: "a" })), /user_id/);
+      await assert.rejects(exchangeCode("x", cred, async () => Response.json({ user_id: 1 })), /access_token/);
       const status = (code: number) => async () => new Response("detalhe interno", { status: code });
-      await assert.rejects(exchangeCode("x", status(400)), ProviderAuthError);
-      await assert.rejects(exchangeCode("x", status(401)), ProviderAuthError);
-      await assert.rejects(exchangeCode("x", status(429)), ProviderTransientError);
-      await assert.rejects(exchangeCode("x", status(503)), ProviderTransientError);
-      await exchangeCode("codigo-secreto", status(400)).catch((erro: Error) => {
+      await assert.rejects(exchangeCode("x", cred, status(400)), ProviderAuthError);
+      await assert.rejects(exchangeCode("x", cred, status(401)), ProviderAuthError);
+      await assert.rejects(exchangeCode("x", cred, status(429)), ProviderTransientError);
+      await assert.rejects(exchangeCode("x", cred, status(503)), ProviderTransientError);
+      await exchangeCode("codigo-secreto", cred, status(400)).catch((erro: Error) => {
         assert.equal(erro.message.includes("codigo-secreto"), false);
         assert.equal(erro.message.includes("segredo-da-aplicacao"), false);
         assert.equal(erro.message.includes("detalhe interno"), false);
@@ -237,6 +265,7 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
     await comAmbiente(configurado, async () => {
       const gravacoes: unknown[] = [];
       const db = {
+        ...configDoCanal,
         marketplaceConnection: {
           updateMany: async (args: { where: Record<string, unknown> }) => {
             gravacoes.push(args.where);
@@ -267,6 +296,7 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
     await comAmbiente(configurado, async () => {
       let tokenUsado = "";
       const db = {
+        ...configDoCanal,
         marketplaceConnection: {
           updateMany: async () => ({ count: 0 }),
           findUniqueOrThrow: async () => ({ accessToken: encryptSecret("APP_USR-do-vencedor") }),
@@ -291,6 +321,7 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
     await comAmbiente(configurado, async () => {
       const gravado: Record<string, unknown>[] = [];
       const db = {
+        ...configDoCanal,
         marketplaceConnection: {
           updateMany: async (args: { data: Record<string, unknown> }) => {
             gravado.push(args.data);

@@ -6,6 +6,7 @@ import { OrderError } from "@/lib/domain/order-input";
 import { isOrgAdmin } from "@/lib/domain/roles";
 import { exchangeCode, oauthConfig } from "@/lib/integrations/mercadolivre/oauth";
 import { assertContaEsperada, lerEstado, STATE_COOKIE } from "@/lib/integrations/oauth-state";
+import { marketplaceSettings } from "@/lib/services/marketplaces";
 import { prisma } from "@/lib/prisma";
 import { syncCategoriesIfStale } from "@/lib/services/categories";
 import { saveProviderConnection } from "@/lib/services/connections";
@@ -44,7 +45,9 @@ export async function GET(request: Request) {
     const estado = lerEstado(cookie, state);
     // A sessão que conclui precisa ser da mesma organização que iniciou.
     if (estado.organizationId !== actor.organizationId) throw new OrderError("Organização divergente.");
-    const tokens = await exchangeCode(code);
+    // A mesma configuração que montou a autorização fecha a troca do código.
+    const cfg = await marketplaceSettings(prisma, estado.marketplaceId);
+    const tokens = await exchangeCode(code, cfg);
     // Reautorização é de uma conta específica: gravar a que o provedor
     // devolveu renovaria a credencial da conta errada.
     assertContaEsperada(estado, tokens.externalAccountId);
@@ -53,7 +56,7 @@ export async function GET(request: Request) {
       marketplaceId: estado.marketplaceId,
       externalAccountId: tokens.externalAccountId,
       // O escopo pedido vem da mesma configuração que montou a autorização.
-      tokens: { ...tokens, escopoPedido: oauthConfig().scope || null },
+      tokens: { ...tokens, escopoPedido: oauthConfig(cfg).scope || null },
     });
 
     // A árvore de categorias é importada DEPOIS da resposta: são alguns

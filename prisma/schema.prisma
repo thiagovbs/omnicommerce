@@ -158,7 +158,15 @@ model Marketplace {
   id             String   @id @default(cuid())
   organizationId String
   name           String
+  /// Slug do canal. Era digitado, e o provedor saia dele por uma tabela de
+  /// nomes conhecidos -- quem digitasse "mercadolivre_2" ficava com um canal
+  /// sem integracao, sem erro visivel. Agora deriva do provedor escolhido na
+  /// lista e continua aqui porque URL, log e tela ja o usam.
   code           String
+  /// Provedor de integracao do canal, escolhido na tela. Nulo so em canal
+  /// antigo cujo codigo nao casava com provedor nenhum: ele segue valendo como
+  /// canal sem integracao, que e o que sempre foi.
+  provider       MarketplaceProvider?
   active         Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -169,9 +177,48 @@ model Marketplace {
   connections       MarketplaceConnection[]
   listings          Listing[]
   categories        MarketplaceCategory[]
+  settings          MarketplaceSetting[]
 
   @@unique([organizationId, code])
+  /// Um canal por provedor por organizacao: varias contas do mesmo provedor
+  /// cabem como conexoes DENTRO do canal. Sem isto, autorizar a partir da
+  /// linha errada move a conexao de canal e os pedidos passam a entrar no
+  /// lugar errado, calados.
+  @@unique([organizationId, provider])
   @@index([organizationId])
+}
+
+/// Configuracao de integracao de um canal, por organizacao.
+///
+/// Existe porque estas credenciais moravam no ambiente: um unico App ID do
+/// Mercado Livre, uma unica URL do Sebo, servindo todas as organizacoes do
+/// mesmo deploy. Uma organizacao nova dependia de quem opera a plataforma
+/// mexer em variavel de ambiente. Aqui, ela cadastra as proprias na tela.
+///
+/// Chave/valor em vez de coluna por campo porque o conjunto de campos e
+/// diferente em cada provedor e muda quando um provedor muda: o catalogo do
+/// que e obrigatorio vive em lib/domain/marketplace-config.ts, e a tela e a
+/// validacao leem dele.
+model MarketplaceSetting {
+  id            String   @id @default(cuid())
+  marketplaceId String
+  key           String
+  /// Valor. Quando `secret`, e ciphertext AES-256-GCM -- o mesmo cofre do
+  /// token da conexao. Nunca aparece em log nem volta para o cliente.
+  value         String
+  secret        Boolean  @default(false)
+  /// sha256 do valor em claro, apenas para o segredo que precisa ser
+  /// ENCONTRADO por ele: o da URL de webhook, que o provedor chama sem dizer
+  /// de quem e. O ciphertext tem IV aleatorio e nao serve para busca.
+  lookupHash    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  marketplace Marketplace @relation(fields: [marketplaceId], references: [id], onDelete: Cascade)
+
+  @@unique([marketplaceId, key])
+  @@index([marketplaceId])
+  @@index([lookupHash])
 }
 
 model Sale {

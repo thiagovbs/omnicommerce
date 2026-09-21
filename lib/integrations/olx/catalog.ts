@@ -111,12 +111,12 @@ interface EstadoOlx {
 }
 
 export async function publishOlxAd(
-  token: string, listing: ListingWithProduct, anunciante: AnuncianteOlx,
+  cfg: Record<string, string>, token: string, listing: ListingWithProduct, anunciante: AnuncianteOlx,
   fetcher: typeof fetch = fetch,
 ): Promise<PublishResult> {
   const produto = listing.product;
   const anuncio = olxAdPayload(listing, anunciante);
-  const { token: importacao } = await importarAnunciosOlx(token, [anuncio], fetcher);
+  const { token: importacao } = await importarAnunciosOlx(cfg, token, [anuncio], fetcher);
 
   // A importação é assíncrona: o PUT só validou a forma. Uma consulta imediata
   // costuma trazer `queued`, mas traz `refused` quando a recusa é rápida -- e
@@ -128,7 +128,7 @@ export async function publishOlxAd(
   // anúncio, e é por isso que `importacao` fica registrada.
   let consulta: Awaited<ReturnType<typeof consultarImportacaoOlx>> | null = null;
   try {
-    consulta = await consultarImportacaoOlx(token, importacao, fetcher);
+    consulta = await consultarImportacaoOlx(cfg, token, importacao, fetcher);
   } catch {
     // Falha de CONSULTA não derruba um anúncio que a OLX já aceitou: o envio é
     // o que importa, a consulta é diagnóstico. A importação fica registrada, e

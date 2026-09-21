@@ -4,6 +4,7 @@ import { MarketplaceProvider, PrismaClient } from "@prisma/client";
 import { OrderError } from "../domain/order-input";
 import { readLimitedText } from "../http/limited-body";
 import { recordOrderEvent } from "../services/integration-events";
+import { canalPorSegredoDeWebhook, marketplaceSettings } from "../services/marketplaces";
 
 export interface ParsedNotification {
   /// Pedido a consultar no provedor.
@@ -23,6 +24,29 @@ export interface NotificationHandler {
   /// Recebe o texto como chegou porque reserializar o JSON reordena chaves e
   /// invalidaria a assinatura por um motivo invisível.
   assinatura?: (corpoCru: string, request: Request) => boolean;
+}
+
+/**
+ * Descobre de QUEM é o aviso, pelo segredo que veio na URL.
+ *
+ * O provedor chama a URL de webhook sem dizer a qual organização ela pertence,
+ * e o segredo deixou de ser um só do deploy: agora cada canal tem o seu. Então
+ * é o próprio segredo que identifica o tenant -- encontrado por hash, porque o
+ * valor é guardado cifrado com IV aleatório e não serve para busca.
+ *
+ * Devolve `null` quando nenhum canal tem aquele segredo, e o chamador responde
+ * 404 -- a mesma resposta do segredo errado, para não confirmar a existência
+ * do endpoint a quem está adivinhando URL.
+ */
+export async function configDoAviso(
+  db: PrismaClient, provider: MarketplaceProvider, segredoRecebido: string,
+): Promise<{ marketplaceId: string; cfg: Record<string, string> } | null> {
+  const canal = await canalPorSegredoDeWebhook(db, provider, segredoRecebido);
+  if (!canal) return null;
+  return {
+    marketplaceId: canal.marketplaceId,
+    cfg: await marketplaceSettings(db, canal.marketplaceId),
+  };
 }
 
 function authorized(supplied: string, expected: string | undefined) {

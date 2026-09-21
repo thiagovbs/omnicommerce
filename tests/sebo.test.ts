@@ -6,6 +6,10 @@ import { encryptSecret } from "../lib/integrations/crypto";
 import { ProviderAuthError, ProviderTransientError } from "../lib/integrations/mercadolivre/client";
 import { providerResolver } from "../lib/integrations/resolve";
 import { fetchSeboOrder, seboApiBase, SeboConfigurationError } from "../lib/integrations/sebo/client";
+
+/// Configuração do canal do Sebo, como o banco a devolve. Era
+/// `SEBO_API_URL` no ambiente -- uma loja para todas as organizações.
+const cfgSebo = { apiUrl: "https://api-assets.sensedia.com/v1" };
 import { normalizeSeboOrder } from "../lib/integrations/sebo/normalize";
 import { parseSeboNotification } from "../lib/integrations/sebo/notification";
 
@@ -41,19 +45,23 @@ const context = (conn: unknown) => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 }) as any;
 
-function comBase<T>(valor: string | undefined, corpo: () => T): T {
-  const anterior = process.env.SEBO_API_URL;
-  if (valor === undefined) delete process.env.SEBO_API_URL;
-  else process.env.SEBO_API_URL = valor;
-  try { return corpo(); } finally {
-    if (anterior === undefined) delete process.env.SEBO_API_URL;
-    else process.env.SEBO_API_URL = anterior;
-  }
-}
 
-// Banco que estoura se for usado: nestes casos o resolver não deve tocá-lo.
-const semBanco = new Proxy({}, {
-  get() { throw new Error("o resolver não deveria consultar o banco aqui"); },
+
+/// Banco que só sabe responder a configuração do canal.
+///
+/// A URL da loja é do CANAL -- cada organização tem o seu Sebo --, então o
+/// resolvedor tem de ir buscá-la. O que este dublê garante é que ele busca
+/// só isso: qualquer outra tabela estoura.
+const bancoComConfig = (valores: Record<string, string>) => new Proxy({
+  marketplaceSetting: {
+    findMany: async () => Object.entries(valores)
+      .map(([key, value]) => ({ key, value, secret: false })),
+  },
+}, {
+  get(alvo: Record<string, unknown>, chave: string) {
+    if (chave in alvo) return alvo[chave];
+    throw new Error(`o resolver não deveria consultar ${chave} aqui`);
+  },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 }) as any;
 
@@ -76,11 +84,12 @@ test("adapter do Sebo On-Line sem rede e sem banco", async (t) => {
   });
 
   await t.test("base da API preserva o prefixo do gateway e exige https", () => {
-    assert.equal(comBase("https://api-assets.sensedia.com/v1", seboApiBase), "https://api-assets.sensedia.com/v1");
-    assert.equal(comBase("https://api-assets.sensedia.com/v1/", seboApiBase), "https://api-assets.sensedia.com/v1");
-    assert.equal(comBase("https://api-assets.sensedia.com", seboApiBase), "https://api-assets.sensedia.com");
+    assert.equal(seboApiBase({ apiUrl: "https://api-assets.sensedia.com/v1" }), "https://api-assets.sensedia.com/v1");
+    assert.equal(seboApiBase({ apiUrl: "https://api-assets.sensedia.com/v1/" }), "https://api-assets.sensedia.com/v1");
+    assert.equal(seboApiBase({ apiUrl: "https://api-assets.sensedia.com" }), "https://api-assets.sensedia.com");
     for (const ruim of [undefined, "", "http://api-assets.sensedia.com/v1", "nao-e-url", "https://u:p@host/v1", "https://host/v1?x=1"]) {
-      assert.throws(() => comBase(ruim, seboApiBase), SeboConfigurationError);
+      // `undefined` é o campo em branco na tela; os outros são valor inválido.
+      assert.throws(() => seboApiBase({ apiUrl: ruim as string }), SeboConfigurationError);
     }
   });
 
@@ -155,18 +164,18 @@ test("adapter do Sebo On-Line sem rede e sem banco", async (t) => {
         visto = { url: String(input), auth: new Headers(init?.headers).get("Authorization") };
         return Response.json(order());
       };
-      await fetchSeboOrder("token-de-servico", "4321", ok);
+      await fetchSeboOrder(cfgSebo, "token-de-servico", "4321", ok);
       assert.equal(visto!.url, "https://api-assets.sensedia.com/v1/integration/orders/4321");
       assert.equal(visto!.auth, "Bearer token-de-servico");
       for (const ruim of ["../orders/1", "1/../admin", "abc", ""]) {
-        await assert.rejects(fetchSeboOrder("t", ruim, ok), OrderError);
+        await assert.rejects(fetchSeboOrder(cfgSebo, "t", ruim, ok), OrderError);
       }
       const status = (code: number) => async () => new Response("detalhe interno", { status: code });
-      await assert.rejects(fetchSeboOrder("t", "1", status(401)), ProviderAuthError);
-      await assert.rejects(fetchSeboOrder("t", "1", status(429)), ProviderTransientError);
-      await assert.rejects(fetchSeboOrder("t", "1", status(502)), ProviderTransientError);
-      await assert.rejects(fetchSeboOrder("t", "1", status(404)), OrderError);
-      await fetchSeboOrder("token-de-servico", "1", status(401)).catch((error: Error) => {
+      await assert.rejects(fetchSeboOrder(cfgSebo, "t", "1", status(401)), ProviderAuthError);
+      await assert.rejects(fetchSeboOrder(cfgSebo, "t", "1", status(429)), ProviderTransientError);
+      await assert.rejects(fetchSeboOrder(cfgSebo, "t", "1", status(502)), ProviderTransientError);
+      await assert.rejects(fetchSeboOrder(cfgSebo, "t", "1", status(404)), OrderError);
+      await fetchSeboOrder(cfgSebo, "token-de-servico", "1", status(401)).catch((error: Error) => {
         assert.equal(error.message.includes("token-de-servico"), false);
       });
     } finally { delete process.env.SEBO_API_URL; }
@@ -177,7 +186,9 @@ test("adapter do Sebo On-Line sem rede e sem banco", async (t) => {
     process.env.INTEGRATION_ENCRYPTION_KEY = randomBytes(32).toString("base64");
     process.env.SEBO_API_URL = "https://api-assets.sensedia.com/v1";
     try {
-      const resolve = providerResolver(semBanco, async () => Response.json(order()));
+      const resolve = providerResolver(
+        bancoComConfig({ apiUrl: "https://api-assets.sensedia.com/v1" }),
+        async () => Response.json(order()));
       const snapshot = await resolve(context(connection({ accessToken: encryptSecret("token-de-servico") })));
       assert.equal(parseIntegratedOrder(snapshot).net.toFixed(2), "299.70");
       // As mesmas guardas do ML valem aqui.

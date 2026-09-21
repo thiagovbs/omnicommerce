@@ -5,6 +5,7 @@ import { providerDoCanal } from "@/lib/domain/marketplace-provider";
 import { isOrgAdmin } from "@/lib/domain/roles";
 import { olxAuthorizationUrl } from "@/lib/integrations/olx/oauth";
 import { criarEstado, STATE_COOKIE } from "@/lib/integrations/oauth-state";
+import { marketplaceSettings } from "@/lib/services/marketplaces";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -59,5 +60,8 @@ export async function GET(request: Request) {
     path: "/api/integrations/olx",
     maxAge: 600,
   });
-  redirect(olxAuthorizationUrl(nonce));
+  // Credenciais da aplicação: do canal, não do ambiente. Duas organizações
+  // no mesmo deploy autorizam cada uma com a aplicação dela.
+  const cfg = await marketplaceSettings(prisma, marketplace.id);
+  redirect(olxAuthorizationUrl(cfg, nonce));
 }

@@ -4,6 +4,7 @@ import { OrderError } from "../domain/order-input";
 import { ListingPublisher } from "../services/listings";
 import { decryptSecret } from "./crypto";
 import { publishMercadoLivreListing } from "./mercadolivre/catalog";
+import { marketplaceSettings } from "../services/marketplaces";
 import { organizationProfile } from "../services/organizations";
 import { publishOlxAd } from "./olx/catalog";
 import { publishSeboProduct } from "./sebo/catalog";
@@ -39,16 +40,21 @@ export function providerPublisher(db: PrismaClient, fetcher: typeof fetch = fetc
       throw new OrderError("Credencial expirada. Reautorize a conexão.");
     }
 
+    // Configuração do canal: credenciais da aplicação e endereços. Moravam no
+    // ambiente, o que dava uma aplicação para todas as organizações do mesmo
+    // deploy; agora são do canal, e o canal é de uma organização.
+    const cfg = await marketplaceSettings(db, listing.marketplaceId);
+
     switch (connection.provider) {
       case "SEBO_ONLINE":
-        return publishSeboProduct(decryptSecret(connection.accessToken), listing.product, fetcher);
+        return publishSeboProduct(cfg, decryptSecret(connection.accessToken), listing.product, fetcher);
       case "MERCADO_LIVRE":
         return publishMercadoLivreListing(decryptSecret(connection.accessToken), listing, fetcher);
       case "SHOPEE":
         // A loja faz parte da credencial na Shopee: o `shop_id` entra na
         // assinatura de toda chamada, e é o `externalAccountId` da conexão.
         return publishShopeeListing(
-          { accessToken: decryptSecret(connection.accessToken), shopId: connection.externalAccountId },
+          cfg, { accessToken: decryptSecret(connection.accessToken), shopId: connection.externalAccountId },
           listing, fetcher);
       case "OLX": {
         // Telefone e CEP do anúncio são da ORGANIZAÇÃO do produto, lidos agora:
@@ -56,7 +62,7 @@ export function providerPublisher(db: PrismaClient, fetcher: typeof fetch = fetc
         // anúncio de um sair com o telefone do outro.
         const empresa = await organizationProfile(db, listing.product.organizationId);
         return publishOlxAd(
-          decryptSecret(connection.accessToken), listing,
+          cfg, decryptSecret(connection.accessToken), listing,
           { telefone: empresa.phone, cep: empresa.zipCode }, fetcher);
       }
     }

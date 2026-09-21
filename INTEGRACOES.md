@@ -103,6 +103,50 @@ Categoria ganhou um terceiro modo por causa deles: além de árvore importada
 Shopee e OLX exigem a categoria deles e a árvore não é importada aqui. Sem esse
 modo, a tela mandava usar texto livre e a publicação recusava para sempre.
 
+## Configuração de canal: do ambiente para o banco
+
+A tela de Marketplaces tinha um campo de **código livre**, e o sistema derivava
+a integração desse texto: quem digitasse `mercadolivre_2` ficava com um canal
+que nunca se conectava, sem erro em lugar nenhum. Agora o provedor vem de uma
+**lista suspensa**, é gravado em `Marketplace.provider`, e o código é derivado
+dele -- os valores continuam sendo `mercado_livre`, `shopee`, `olx` e `sebo`,
+porque URL, log e a árvore de categorias os referenciam.
+
+Junto veio a parte que faltava para a plataforma atender mais de uma empresa: as
+**credenciais de cada provedor saíram do ambiente**. Eram `MERCADO_LIVRE_APP_ID`,
+`SHOPEE_PARTNER_KEY`, `SEBO_API_URL` e companhia -- uma aplicação e uma loja
+para todas as organizações do mesmo deploy. Uma organização nova dependia de
+alguém mexer em variável de ambiente. Hoje cada uma cadastra as suas em
+`MarketplaceSetting`, e a tela mostra os campos **daquele** provedor, vindos de
+um catálogo único (`lib/domain/marketplace-config.ts`) que a tela e a validação
+do servidor compartilham.
+
+Quatro decisões que valem registro:
+
+- **Um canal por provedor por organização**, garantido por índice único. Não é
+  gosto: a conexão é única por (provedor, conta), então autorizar a partir de um
+  segundo canal do mesmo provedor MOVE a conexão para ele, e os pedidos passam a
+  entrar no canal errado sem nenhum erro visível.
+- **Segredo não volta.** O que é segredo é gravado cifrado (mesmo cofre do token
+  da conexão), a tela só sabe que existe, e a auditoria registra o NOME do campo
+  alterado -- nunca o valor, porque o log é lido por mais gente que o cofre.
+- **O segredo do webhook identifica o tenant.** O provedor chama a URL sem dizer
+  de quem é o aviso, e o segredo deixou de ser um só do deploy. Ele é encontrado
+  por `sha256` (`lookupHash`), porque o ciphertext tem IV aleatório e não serve
+  para busca; a confirmação é comparação de tempo constante. Quem não casa
+  recebe 404, igual a antes.
+- **A configuração é lida no ramo que precisa dela.** Consultar um pedido do
+  Mercado Livre com token válido não vai ao banco buscar credencial; a
+  renovação, sim. E a recusa da OLX ("não tem pedido") continua sem tocar no
+  banco -- há teste que passa um banco nulo justamente para provar isso.
+
+`APP_URL` e `INTEGRATION_ENCRYPTION_KEY` continuam no ambiente de propósito: são
+da instalação, não de uma organização. As variáveis de provedor ainda existem
+para uma única finalidade -- `npm run config:import`, que roda no `build:vercel`
+e leva para o banco o que ainda não estiver lá, **sem sobrescrever** o que foi
+digitado na tela. É idempotente e não derruba o build: falhar ali deixa a tela
+dizendo o que falta, o que é melhor que um deploy que não sai.
+
 ## Jornada validada em produção
 
 Compra real no Sebo On-Line, 18/09/2026:

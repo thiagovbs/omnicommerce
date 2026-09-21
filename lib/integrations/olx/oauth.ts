@@ -47,33 +47,38 @@ function origem(valor: string, nome: string) {
   return url.toString();
 }
 
-export function olxOauthConfig() {
-  const { OLX_CLIENT_ID, OLX_CLIENT_SECRET, APP_URL } = process.env;
-  const ausentes = Object.entries({ OLX_CLIENT_ID, OLX_CLIENT_SECRET, APP_URL })
-    .filter(([, valor]) => !valor).map(([nome]) => nome);
+/// Credenciais do cliente OAuth da OLX, vindas do cadastro do canal.
+export function olxOauthConfig(cfg: Record<string, string>) {
+  const { APP_URL } = process.env;
+  const ausentes = [
+    cfg.clientId ? null : "Client ID",
+    cfg.clientSecret ? null : "Client Secret",
+  ].filter(Boolean);
+  if (!APP_URL) throw new OlxOAuthConfigurationError("APP_URL não configurada neste deploy.");
   if (ausentes.length) {
-    throw new OlxOAuthConfigurationError(`OAuth da OLX não configurado: ${ausentes.join(", ")}.`);
+    throw new OlxOAuthConfigurationError(
+      `OAuth da OLX não configurado: ${ausentes.join(", ")}. Preencha na tela de Marketplaces.`);
   }
-  const app = new URL(APP_URL!);
+  const app = new URL(APP_URL);
   return {
-    clientId: OLX_CLIENT_ID!,
-    clientSecret: OLX_CLIENT_SECRET!,
-    authBase: origem(process.env.OLX_AUTH_URL ?? AUTH_PADRAO, "OLX_AUTH_URL"),
-    tokenBase: origem(process.env.OLX_TOKEN_URL ?? TOKEN_PADRAO, "OLX_TOKEN_URL"),
+    clientId: cfg.clientId,
+    clientSecret: cfg.clientSecret,
+    authBase: origem(cfg.authUrl || AUTH_PADRAO, "URL de autorização"),
+    tokenBase: origem(cfg.tokenUrl || TOKEN_PADRAO, "URL de token"),
     // Precisa bater EXATAMENTE com uma das URIs cadastradas por e-mail junto do
     // suporte ao integrador: a OLX registra de uma a três, e não valida por
     // domínio. É por isso que o nonce da OLX vai em `state`, e não no caminho.
     redirectUri: new URL("/api/integrations/olx/callback", app).toString(),
-    scope: (process.env.OLX_SCOPE ?? ESCOPO_PADRAO).trim(),
+    scope: (cfg.scope || ESCOPO_PADRAO).trim(),
   };
 }
 
-export function olxOauthConfigured() {
-  try { olxOauthConfig(); return true; } catch { return false; }
+export function olxOauthConfigured(cfg: Record<string, string>) {
+  try { olxOauthConfig(cfg); return true; } catch { return false; }
 }
 
-export function olxAuthorizationUrl(state: string) {
-  const config = olxOauthConfig();
+export function olxAuthorizationUrl(cfg: Record<string, string>, state: string) {
+  const config = olxOauthConfig(cfg);
   const url = new URL(config.authBase);
   url.searchParams.set("client_id", config.clientId);
   url.searchParams.set("response_type", "code");
@@ -83,8 +88,10 @@ export function olxAuthorizationUrl(state: string) {
   return url.toString();
 }
 
-async function pedirToken(corpo: URLSearchParams, fetcher: typeof fetch) {
-  const config = olxOauthConfig();
+async function pedirToken(
+  cfg: Record<string, string>, corpo: URLSearchParams, fetcher: typeof fetch,
+) {
+  const config = olxOauthConfig(cfg);
   const response = await fetcher(config.tokenBase, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
@@ -113,10 +120,12 @@ async function pedirToken(corpo: URLSearchParams, fetcher: typeof fetch) {
   } satisfies ProviderTokens;
 }
 
-export async function exchangeOlxCode(code: string, fetcher: typeof fetch = fetch) {
-  const config = olxOauthConfig();
+export async function exchangeOlxCode(
+  cfg: Record<string, string>, code: string, fetcher: typeof fetch = fetch,
+) {
+  const config = olxOauthConfig(cfg);
   const codigo = textInput(code, "Código de autorização", 500);
-  return pedirToken(new URLSearchParams({
+  return pedirToken(cfg, new URLSearchParams({
     grant_type: "authorization_code",
     client_id: config.clientId,
     client_secret: config.clientSecret,
@@ -135,9 +144,11 @@ export async function exchangeOlxCode(code: string, fetcher: typeof fetch = fetc
  * O caminho é configurável porque não pudemos confirmá-lo: se estiver errado, a
  * autorização falha com mensagem clara e se corrige por variável de ambiente.
  */
-export async function fetchOlxUserInfo(token: string, fetcher: typeof fetch = fetch) {
-  const caminho = process.env.OLX_USER_INFO_PATH ?? "/oauth_api/basic_user_info";
-  const response = await fetcher(`${olxApiBase()}${caminho}`, {
+export async function fetchOlxUserInfo(
+  cfg: Record<string, string>, token: string, fetcher: typeof fetch = fetch,
+) {
+  const caminho = cfg.userInfoPath || "/oauth_api/basic_user_info";
+  const response = await fetcher(`${olxApiBase(cfg)}${caminho}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ access_token: token }),

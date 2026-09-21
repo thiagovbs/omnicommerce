@@ -81,9 +81,9 @@ export function impressaoDeConteudo(listing: ListingWithProduct) {
  * `Content-Type` nosso — o limite do multipart é o `FormData` que define.
  */
 async function subirImagem(
-  loja: ShopeeCredenciais, dataUri: string, fetcher: typeof fetch,
+  cfg: Record<string, string>, loja: ShopeeCredenciais, dataUri: string, fetcher: typeof fetch,
 ): Promise<string> {
-  const config = shopeeConfig();
+  const config = shopeeConfig(cfg);
   const separador = dataUri.indexOf(";base64,");
   if (!dataUri.startsWith("data:") || separador < 0) {
     throw new OrderError("Imagem em formato que a Shopee não aceita.");
@@ -131,7 +131,8 @@ async function subirImagem(
 }
 
 export async function prepararImagensShopee(
-  loja: ShopeeCredenciais, urls: string[], fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, loja: ShopeeCredenciais, urls: string[],
+  fetcher: typeof fetch = fetch,
 ) {
   if (!urls.length) throw new OrderError("A Shopee exige ao menos uma imagem no anúncio.");
   const ids: string[] = [];
@@ -143,7 +144,7 @@ export async function prepararImagensShopee(
         "A Shopee só aceita imagem enviada como arquivo, não por URL. Envie a imagem"
         + " do computador no álbum do produto.");
     }
-    ids.push(await subirImagem(loja, url, fetcher));
+    ids.push(await subirImagem(cfg, loja, url, fetcher));
   }
   return ids;
 }
@@ -157,9 +158,9 @@ export async function prepararImagensShopee(
  * do provedor fala de campo inválido.
  */
 export async function logisticasHabilitadas(
-  loja: ShopeeCredenciais, fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, loja: ShopeeCredenciais, fetcher: typeof fetch = fetch,
 ) {
-  const conteudo = await chamarShopee("/api/v2/logistics/get_channel_list", {
+  const conteudo = await chamarShopee(cfg, "/api/v2/logistics/get_channel_list", {
     loja, oQueFalhou: "Falha ao ler os canais de entrega da Shopee",
   }, fetcher);
   const lista = Array.isArray(conteudo.logistics_channel_list) ? conteudo.logistics_channel_list : [];
@@ -175,11 +176,11 @@ export async function logisticasHabilitadas(
   return habilitados.map((id) => ({ logistic_id: id, enabled: true }));
 }
 
-function pesoEmKg() {
-  const bruto = (process.env.SHOPEE_DEFAULT_WEIGHT_KG ?? PESO_PADRAO_KG).trim();
+function pesoEmKg(cfg: Record<string, string>) {
+  const bruto = (cfg.defaultWeightKg || PESO_PADRAO_KG).trim();
   const peso = Number(bruto);
   if (!Number.isFinite(peso) || peso <= 0) {
-    throw new OrderError("SHOPEE_DEFAULT_WEIGHT_KG inválido.");
+    throw new OrderError("Peso padrão (kg) inválido na configuração do canal.");
   }
   return peso;
 }
@@ -198,7 +199,8 @@ export function condicaoShopee(condicao: string) {
 }
 
 export async function publishShopeeListing(
-  loja: ShopeeCredenciais, listing: ListingWithProduct, fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, loja: ShopeeCredenciais, listing: ListingWithProduct,
+  fetcher: typeof fetch = fetch,
 ): Promise<PublishResult> {
   const produto = listing.product;
   const preco = Number(produto.price.toFixed(2));
@@ -206,10 +208,10 @@ export async function publishShopeeListing(
 
   if (!listing.externalListingId) {
     const [imagens, logistica] = await Promise.all([
-      prepararImagensShopee(loja, produto.images.map((i) => i.url), fetcher),
-      logisticasHabilitadas(loja, fetcher),
+      prepararImagensShopee(cfg, loja, produto.images.map((i) => i.url), fetcher),
+      logisticasHabilitadas(cfg, loja, fetcher),
     ]);
-    const resposta = await chamarShopee("/api/v2/product/add_item", {
+    const resposta = await chamarShopee(cfg, "/api/v2/product/add_item", {
       metodo: "POST",
       loja,
       corpo: {
@@ -221,7 +223,7 @@ export async function publishShopeeListing(
         seller_stock: [{ stock: produto.stock }],
         item_status: produto.active ? "NORMAL" : "UNLIST",
         condition: condicaoShopee(produto.condition),
-        weight: pesoEmKg(),
+        weight: pesoEmKg(cfg),
         image: { image_id_list: imagens },
         logistic_info: logistica,
       },
@@ -251,12 +253,12 @@ export async function publishShopeeListing(
   }
 
   // Preço e estoque vão sempre: são o que muda a cada venda, e são baratos.
-  await chamarShopee("/api/v2/product/update_price", {
+  await chamarShopee(cfg, "/api/v2/product/update_price", {
     metodo: "POST", loja,
     corpo: { item_id: itemId, price_list: [{ original_price: preco }] },
     oQueFalhou: "A Shopee recusou a atualização de preço",
   }, fetcher);
-  await chamarShopee("/api/v2/product/update_stock", {
+  await chamarShopee(cfg, "/api/v2/product/update_stock", {
     metodo: "POST", loja,
     corpo: { item_id: itemId, stock_list: [{ seller_stock: [{ stock: produto.stock }] }] },
     oQueFalhou: "A Shopee recusou a atualização de estoque",
@@ -281,9 +283,9 @@ export async function publishShopeeListing(
   // é do arquivo enviado, e não há como referenciar o que já está lá sem
   // guardá-lo -- que é exatamente o que o resumo faz, mas só vale enquanto o
   // álbum não muda.
-  const imagens = await prepararImagensShopee(loja, produto.images.map((i) => i.url), fetcher);
+  const imagens = await prepararImagensShopee(cfg, loja, produto.images.map((i) => i.url), fetcher);
   try {
-    const resposta = await chamarShopee("/api/v2/product/update_item", {
+    const resposta = await chamarShopee(cfg, "/api/v2/product/update_item", {
       metodo: "POST", loja,
       corpo: {
         item_id: itemId,

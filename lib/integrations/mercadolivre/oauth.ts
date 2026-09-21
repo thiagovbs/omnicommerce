@@ -35,38 +35,63 @@ function origem(valor: string, nome: string, permitidos: RegExp) {
   return url;
 }
 
-export function oauthConfig() {
-  const { MERCADO_LIVRE_APP_ID, MERCADO_LIVRE_APP_SECRET, APP_URL } = process.env;
-  const ausentes = Object.entries({ MERCADO_LIVRE_APP_ID, MERCADO_LIVRE_APP_SECRET, APP_URL })
-    .filter(([, valor]) => !valor).map(([nome]) => nome);
-  if (!MERCADO_LIVRE_APP_ID || !MERCADO_LIVRE_APP_SECRET || !APP_URL) {
-    throw new OAuthConfigurationError(`OAuth do Mercado Livre não configurado: ${ausentes.join(", ")}.`);
+/**
+ * Credenciais da aplicação do Mercado Livre, vindas da configuração do CANAL.
+ *
+ * Eram variáveis de ambiente, e isso dava uma aplicação só para todas as
+ * organizações do mesmo deploy. Agora cada organização cadastra a dela na tela
+ * de Marketplaces, e o que chega aqui é o conteúdo daquele cadastro.
+ *
+ * `APP_URL` continua no ambiente de propósito: é o endereço público DESTE
+ * deploy, usado para montar o `redirect_uri`. É da instalação, não do tenant.
+ */
+export interface CredenciaisMercadoLivre {
+  appId?: string;
+  appSecret?: string;
+  scope?: string;
+  authUrl?: string;
+  tokenUrl?: string;
+}
+
+export function oauthConfig(cred: CredenciaisMercadoLivre) {
+  const { APP_URL } = process.env;
+  if (!APP_URL) throw new OAuthConfigurationError("APP_URL não configurada neste deploy.");
+  const ausentes = [
+    cred.appId ? null : "App ID",
+    cred.appSecret ? null : "App Secret",
+  ].filter(Boolean);
+  if (!cred.appId || !cred.appSecret) {
+    throw new OAuthConfigurationError(
+      `OAuth do Mercado Livre não configurado: ${ausentes.join(", ")}.`
+      + " Preencha na tela de Marketplaces.");
   }
   // Só domínios do Mercado Livre, para configuração errada não virar
   // redirecionamento para host arbitrário.
   const mercadoLivre = /^([a-z0-9-]+\.)*mercado(livre|libre)\.com(\.[a-z]{2})?$/;
-  const authBase = origem(process.env.MERCADO_LIVRE_AUTH_URL ?? AUTH_BASE_PADRAO, "MERCADO_LIVRE_AUTH_URL", mercadoLivre);
-  const tokenBase = origem(process.env.MERCADO_LIVRE_TOKEN_URL ?? TOKEN_BASE_PADRAO, "MERCADO_LIVRE_TOKEN_URL", mercadoLivre);
+  const authBase = origem(cred.authUrl || AUTH_BASE_PADRAO, "URL de autorização", mercadoLivre);
+  const tokenBase = origem(cred.tokenUrl || TOKEN_BASE_PADRAO, "URL de token", mercadoLivre);
   const app = origem(APP_URL, "APP_URL", /.*/);
   if (app.pathname !== "/" || app.search) throw new OAuthConfigurationError("APP_URL inválida.");
   return {
-    clientId: MERCADO_LIVRE_APP_ID,
-    clientSecret: MERCADO_LIVRE_APP_SECRET,
+    clientId: cred.appId,
+    clientSecret: cred.appSecret,
     authBase: authBase.toString(),
     tokenBase: tokenBase.toString(),
     // Precisa bater EXATAMENTE com o que está cadastrado na aplicação do ML.
     redirectUri: new URL("/api/integrations/mercadolivre/callback", app).toString(),
-    scope: (process.env.MERCADO_LIVRE_SCOPE ?? SCOPE_PADRAO).trim(),
+    // Ausente usa o padrão; VAZIO manda a autorização sem escopo, que é como
+    // se reaproveita um consentimento já concedido. Os dois casos existem.
+    scope: (cred.scope === undefined ? SCOPE_PADRAO : cred.scope).trim(),
   };
 }
 
 // Para a tela decidir se oferece o botão: sem isto, o clique cairia num 500.
-export function oauthConfigured() {
-  try { oauthConfig(); return true; } catch { return false; }
+export function oauthConfigured(cred: CredenciaisMercadoLivre) {
+  try { oauthConfig(cred); return true; } catch { return false; }
 }
 
-export function authorizationUrl(state: string) {
-  const config = oauthConfig();
+export function authorizationUrl(state: string, cred: CredenciaisMercadoLivre) {
+  const config = oauthConfig(cred);
   const url = new URL(config.authBase);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", config.clientId);
@@ -114,8 +139,10 @@ function leiaTokenSet(corpo: unknown): TokenSet {
   };
 }
 
-async function pedeToken(corpo: URLSearchParams, fetcher: typeof fetch) {
-  const config = oauthConfig();
+async function pedeToken(
+  corpo: URLSearchParams, cred: CredenciaisMercadoLivre, fetcher: typeof fetch,
+) {
+  const config = oauthConfig(cred);
   const response = await fetcher(config.tokenBase, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
@@ -131,8 +158,10 @@ async function pedeToken(corpo: URLSearchParams, fetcher: typeof fetch) {
   return leiaTokenSet(await response.json());
 }
 
-export async function exchangeCode(code: string, fetcher: typeof fetch = fetch) {
-  const config = oauthConfig();
+export async function exchangeCode(
+  code: string, cred: CredenciaisMercadoLivre, fetcher: typeof fetch = fetch,
+) {
+  const config = oauthConfig(cred);
   if (!code.trim() || code.length > 500) throw new OrderError("Código de autorização inválido.");
   return pedeToken(new URLSearchParams({
     grant_type: "authorization_code",
@@ -140,16 +169,18 @@ export async function exchangeCode(code: string, fetcher: typeof fetch = fetch) 
     client_secret: config.clientSecret,
     code,
     redirect_uri: config.redirectUri,
-  }), fetcher);
+  }), cred, fetcher);
 }
 
-export async function refreshToken(refresh: string, fetcher: typeof fetch = fetch) {
-  const config = oauthConfig();
+export async function refreshToken(
+  refresh: string, cred: CredenciaisMercadoLivre, fetcher: typeof fetch = fetch,
+) {
+  const config = oauthConfig(cred);
   if (!refresh.trim()) throw new OrderError("Credencial de renovação ausente.");
   return pedeToken(new URLSearchParams({
     grant_type: "refresh_token",
     client_id: config.clientId,
     client_secret: config.clientSecret,
     refresh_token: refresh,
-  }), fetcher);
+  }), cred, fetcher);
 }

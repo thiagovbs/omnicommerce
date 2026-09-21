@@ -28,7 +28,7 @@ try {
     & ./node_modules/.bin/prisma.cmd migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --exit-code
     if ($LASTEXITCODE -ne 0) { throw 'Migration/schema drift detected' }
     $env:TS_NODE_COMPILER_OPTIONS = '{"module":"CommonJS","moduleResolution":"node"}'
-    node --conditions=react-server -r ts-node/register --test tests/orders.integration.test.ts tests/access.integration.test.ts tests/integration-events.test.ts tests/mercadolivre.test.ts tests/sebo.test.ts tests/oauth.test.ts tests/reconciliation.test.ts tests/messaging.test.ts tests/catalog.test.ts tests/categories.test.ts tests/ml-catalog.test.ts tests/listing-attributes.test.ts tests/shopee.test.ts tests/olx.test.ts tests/tenant-isolation.test.ts tests/organization-profile.test.ts
+    node --conditions=react-server -r ts-node/register --test tests/orders.integration.test.ts tests/access.integration.test.ts tests/integration-events.test.ts tests/mercadolivre.test.ts tests/sebo.test.ts tests/oauth.test.ts tests/reconciliation.test.ts tests/messaging.test.ts tests/catalog.test.ts tests/categories.test.ts tests/ml-catalog.test.ts tests/listing-attributes.test.ts tests/shopee.test.ts tests/olx.test.ts tests/tenant-isolation.test.ts tests/organization-profile.test.ts tests/marketplace-config.test.ts
     if ($LASTEXITCODE -ne 0) { throw 'Order service tests failed' }
 } finally {
     $env:DATABASE_URL = $previousUrl

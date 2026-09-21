@@ -2,6 +2,7 @@ import "server-only";
 import { MarketplaceConnection, PrismaClient } from "@prisma/client";
 import { OrderError } from "../domain/order-input";
 import { OrderSnapshotResolver } from "../services/integration-events";
+import { marketplaceSettings } from "../services/marketplaces";
 import { decryptSecret, encryptSecret } from "./crypto";
 import { fetchOrder, ProviderAuthError } from "./mercadolivre/client";
 import { normalizeMercadoLivreOrder } from "./mercadolivre/normalize";
@@ -22,9 +23,13 @@ async function renovarMercadoLivre(
   if (!connection.refreshToken) {
     throw new OrderError("Conexão sem credencial de renovação. Reautorize a conexão.");
   }
+  // Credenciais da aplicação: do canal. A leitura é aqui, e não no
+  // resolvedor, porque só a renovação precisa delas -- consultar um pedido
+  // com token válido não tem por que ir ao banco buscar configuração.
+  const cfg = await marketplaceSettings(db, connection.marketplaceId);
   let tokens;
   try {
-    tokens = await refreshToken(decryptSecret(connection.refreshToken), fetcher);
+    tokens = await refreshToken(decryptSecret(connection.refreshToken), cfg, fetcher);
   } catch (error) {
     // Renovação recusada não se resolve repetindo: marca a conexão para
     // reautorização em vez de queimar as tentativas do evento.
@@ -68,15 +73,18 @@ async function renovarMercadoLivre(
  * apareceria semanas depois, sem ligação com a causa.
  */
 async function renovarShopee(
-  db: PrismaClient, connection: MarketplaceConnection, fetcher: typeof fetch,
+  db: PrismaClient, connection: MarketplaceConnection,
+  cfg: Record<string, string>, fetcher: typeof fetch,
 ) {
+  // A Shopee recebe a config de fora: quem chama já a carregou para
+  // assinar a consulta do pedido, e buscá-la duas vezes seria desperdício.
   if (!connection.refreshToken) {
     throw new OrderError("Conexão sem credencial de renovação. Reautorize a conexão.");
   }
   let tokens;
   try {
     tokens = await refreshShopeeToken(
-      decryptSecret(connection.refreshToken), connection.externalAccountId, fetcher);
+      cfg, decryptSecret(connection.refreshToken), connection.externalAccountId, fetcher);
   } catch (error) {
     if (error instanceof ProviderAuthError) {
       await db.marketplaceConnection.updateMany({
@@ -128,16 +136,19 @@ export function providerResolver(db: PrismaClient, fetcher: typeof fetch = fetch
       case "SEBO_ONLINE": {
         // Token de serviço de vida longa: não há renovação a fazer.
         if (expirando) throw new OrderError("Credencial expirada. Reautorize a conexão.");
+        // A URL da loja é do canal: cada organização tem o seu Sebo.
+        const cfg = await marketplaceSettings(db, connection.marketplaceId);
         return normalizeSeboOrder(
-          await fetchSeboOrder(decryptSecret(connection.accessToken), event.externalOrderId, fetcher),
+          await fetchSeboOrder(cfg, decryptSecret(connection.accessToken), event.externalOrderId, fetcher),
         );
       }
       case "SHOPEE": {
+        const cfg = await marketplaceSettings(db, connection.marketplaceId);
         const token = expirando
-          ? await renovarShopee(db, connection, fetcher)
+          ? await renovarShopee(db, connection, cfg, fetcher)
           : decryptSecret(connection.accessToken);
         return normalizeShopeeOrder(await fetchShopeeOrder(
-          { accessToken: token, shopId: connection.externalAccountId },
+          cfg, { accessToken: token, shopId: connection.externalAccountId },
           event.externalOrderId, fetcher));
       }
       case "OLX":

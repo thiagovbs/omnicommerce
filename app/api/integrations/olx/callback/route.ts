@@ -5,6 +5,7 @@ import { OrderError } from "@/lib/domain/order-input";
 import { isOrgAdmin } from "@/lib/domain/roles";
 import { exchangeOlxCode, fetchOlxUserInfo } from "@/lib/integrations/olx/oauth";
 import { assertContaEsperada, lerEstado, STATE_COOKIE } from "@/lib/integrations/oauth-state";
+import { marketplaceSettings } from "@/lib/services/marketplaces";
 import { prisma } from "@/lib/prisma";
 import { saveProviderConnection } from "@/lib/services/connections";
 
@@ -38,11 +39,13 @@ export async function GET(request: Request) {
     const estado = lerEstado(cookie, state);
     if (estado.organizationId !== actor.organizationId) throw new OrderError("Organização divergente.");
 
-    const tokens = await exchangeOlxCode(code);
+    // A mesma configuração que montou a autorização fecha a troca do código.
+    const cfg = await marketplaceSettings(prisma, estado.marketplaceId);
+    const tokens = await exchangeOlxCode(cfg, code);
     // A OLX não devolve identificador de conta no token, e sem ele não há como
     // saber se esta autorização é a mesma conta de antes ou outra -- a conexão
     // é única por (provedor, conta).
-    const conta = await fetchOlxUserInfo(tokens.accessToken);
+    const conta = await fetchOlxUserInfo(cfg, tokens.accessToken);
     assertContaEsperada(estado, conta.externalAccountId);
     await saveProviderConnection(prisma, actor, {
       provider: "OLX",

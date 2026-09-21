@@ -12,15 +12,19 @@ import { providerLister } from "../lib/integrations/reconcile";
 import { providerResolver } from "../lib/integrations/resolve";
 import type { ListingWithProduct } from "../lib/services/listings";
 
+/// Nenhuma chamada deste arquivo deve alcançar o banco.
+const semBanco = null as unknown as import("@prisma/client").PrismaClient;
+
+// No ambiente sobra o que é da INSTALAÇÃO: o endereço público deste deploy.
+// As credenciais da OLX são do canal, e chegam como objeto.
 const ambiente = {
-  OLX_CLIENT_ID: "cliente-olx",
-  OLX_CLIENT_SECRET: "segredo-olx",
   APP_URL: "https://omnicommerce.vercel.app",
-  OLX_AUTH_URL: undefined,
-  OLX_TOKEN_URL: undefined,
-  OLX_API_URL: undefined,
-  OLX_SCOPE: undefined,
-  OLX_USER_INFO_PATH: undefined,
+};
+
+/// Configuração do canal da OLX, como o banco a devolve.
+const cfgOlx: Record<string, string> = {
+  clientId: "cliente-olx",
+  clientSecret: "segredo-olx",
 };
 
 function comAmbiente<T>(vars: Record<string, string | undefined>, corpo: () => T): T {
@@ -107,7 +111,7 @@ const conexao = (extra: Record<string, unknown> = {}) => ({
 test("OAuth da OLX", async (t) => {
   await t.test("a URL leva client_id, escopo e state, e o retorno é fixo", () => {
     comAmbiente(ambiente, () => {
-      const url = new URL(olxAuthorizationUrl("nonce-1"));
+      const url = new URL(olxAuthorizationUrl(cfgOlx, "nonce-1"));
       assert.equal(url.origin + url.pathname, "https://auth.olx.com.br/oauth");
       assert.equal(url.searchParams.get("client_id"), "cliente-olx");
       assert.equal(url.searchParams.get("response_type"), "code");
@@ -124,13 +128,16 @@ test("OAuth da OLX", async (t) => {
   });
 
   await t.test("configuração ausente é nomeada, e host fora da OLX é recusado", () => {
-    comAmbiente({ ...ambiente, OLX_CLIENT_ID: undefined }, () => {
-      assert.equal(olxOauthConfigured(), false);
-      assert.throws(() => olxOauthConfig(), /OLX_CLIENT_ID/);
+    comAmbiente(ambiente, () => {
+      assert.equal(olxOauthConfigured({ ...cfgOlx, clientId: "" }), false);
+      // Nomeia o CAMPO da tela, não a variável de ambiente.
+      assert.throws(() => olxOauthConfig({ ...cfgOlx, clientId: "" }), /Client ID/);
     });
-    comAmbiente({ ...ambiente, OLX_AUTH_URL: "https://exemplo.invalid/oauth" }, () => {
+    comAmbiente(ambiente, () => {
       // Configuração errada não pode virar redirecionamento para host qualquer.
-      assert.throws(() => olxOauthConfig(), /domínio da OLX/);
+      assert.throws(
+        () => olxOauthConfig({ ...cfgOlx, authUrl: "https://evil.example.com" }),
+        /domínio da OLX/);
     });
   });
 
@@ -139,7 +146,7 @@ test("OAuth da OLX", async (t) => {
       const { fetcher, chamadas } = provedor({
         "/oauth/token": { corpo: { access_token: "token-olx", scope: "autoupload" } },
       });
-      const tokens = await exchangeOlxCode("codigo", fetcher);
+      const tokens = await exchangeOlxCode(cfgOlx, "codigo", fetcher);
       assert.equal(tokens.accessToken, "token-olx");
       // A OLX não documenta validade nem refresh. Nulo é "sem vencimento
       // conhecido"; um prazo inventado reautorizaria sem motivo ou falharia calado.
@@ -158,10 +165,10 @@ test("OAuth da OLX", async (t) => {
   await t.test("recusa e indisponibilidade são classificadas", async () => {
     await comAmbiente(ambiente, async () => {
       const recusa = provedor({ "/oauth/token": { status: 400, corpo: {} } });
-      await assert.rejects(exchangeOlxCode("x", recusa.fetcher),
+      await assert.rejects(exchangeOlxCode(cfgOlx, "x", recusa.fetcher),
         (e: Error) => e instanceof ProviderAuthError);
       const fora = provedor({ "/oauth/token": { status: 503, corpo: {} } });
-      await assert.rejects(exchangeOlxCode("x", fora.fetcher),
+      await assert.rejects(exchangeOlxCode(cfgOlx, "x", fora.fetcher),
         (e: Error) => e instanceof ProviderTransientError);
     });
   });
@@ -171,13 +178,13 @@ test("OAuth da OLX", async (t) => {
       const comId = provedor({
         "/basic_user_info": { corpo: { user_id: 998877, name: "Loja Teste", email: "A@Exemplo.Invalid" } },
       });
-      const conta = await fetchOlxUserInfo("token", comId.fetcher);
+      const conta = await fetchOlxUserInfo(cfgOlx, "token", comId.fetcher);
       // O id vem primeiro: e-mail o anunciante pode trocar.
       assert.equal(conta.externalAccountId, "998877");
       assert.equal(conta.email, "a@exemplo.invalid");
 
       const soEmail = provedor({ "/basic_user_info": { corpo: { email: "b@exemplo.invalid" } } });
-      assert.equal((await fetchOlxUserInfo("token", soEmail.fetcher)).externalAccountId,
+      assert.equal((await fetchOlxUserInfo(cfgOlx, "token", soEmail.fetcher)).externalAccountId,
         "b@exemplo.invalid");
     });
   });
@@ -185,11 +192,11 @@ test("OAuth da OLX", async (t) => {
   await t.test("sem identificar a conta, a autorização falha dizendo onde corrigir", async () => {
     await comAmbiente(ambiente, async () => {
       const semNada = provedor({ "/basic_user_info": { corpo: {} } });
-      await assert.rejects(fetchOlxUserInfo("token", semNada.fetcher),
+      await assert.rejects(fetchOlxUserInfo(cfgOlx, "token", semNada.fetcher),
         (e: Error) => e instanceof OrderError && /identificador nem e-mail/.test(e.message));
 
       const caminhoErrado = provedor({ "/nada": { corpo: {} } });
-      await assert.rejects(fetchOlxUserInfo("token", caminhoErrado.fetcher),
+      await assert.rejects(fetchOlxUserInfo(cfgOlx, "token", caminhoErrado.fetcher),
         (e: Error) => e instanceof OrderError && /OLX_USER_INFO_PATH/.test(e.message));
     });
   });
@@ -287,10 +294,12 @@ test("corpo do anúncio da OLX", async (t) => {
 
   await t.test("a base da API só aceita https e preserva o prefixo", () => {
     comAmbiente(ambiente, () => {
-      assert.equal(olxApiBase(), "https://apps.olx.com.br");
+      assert.equal(olxApiBase(cfgOlx), "https://apps.olx.com.br");
     });
-    comAmbiente({ ...ambiente, OLX_API_URL: "http://apps.olx.com.br" }, () => {
-      assert.throws(() => olxApiBase(), /OLX_API_URL inválida/);
+    comAmbiente(ambiente, () => {
+      assert.throws(
+        () => olxApiBase({ ...cfgOlx, apiUrl: "http://apps.olx.com.br" }),
+        /URL da API da OLX inválida/);
     });
   });
 });
@@ -301,7 +310,7 @@ test("importação de anúncio na OLX", async (t) => {
   await t.test("o envio é PUT com access_token e ad_list no corpo", async () => {
     await comAmbiente(ambiente, async () => {
       const { fetcher, chamadas } = provedor(importacaoOk);
-      const resultado = await importarAnunciosOlx("token-olx", [{ id: "a" }], fetcher);
+      const resultado = await importarAnunciosOlx(cfgOlx, "token-olx", [{ id: "a" }], fetcher);
       assert.equal(resultado.token, "imp-1");
       assert.equal(chamadas[0].metodo, "PUT");
       assert.deepEqual(chamadas[0].corpo, { access_token: "token-olx", ad_list: [{ id: "a" }] });
@@ -313,17 +322,17 @@ test("importação de anúncio na OLX", async (t) => {
       const semPermissao = provedor({
         "/autoupload/import": { corpo: { statusCode: -6, statusMessage: "sem permissao" } },
       });
-      await assert.rejects(importarAnunciosOlx("t", [{}], semPermissao.fetcher),
+      await assert.rejects(importarAnunciosOlx(cfgOlx, "t", [{}], semPermissao.fetcher),
         (e: Error) => e instanceof OrderError && /plano contratado/.test(e.message));
 
       const semVaga = provedor({ "/autoupload/import": { corpo: { statusCode: -7 } } });
-      await assert.rejects(importarAnunciosOlx("t", [{}], semVaga.fetcher),
+      await assert.rejects(importarAnunciosOlx(cfgOlx, "t", [{}], semVaga.fetcher),
         (e: Error) => e instanceof OrderError && /vagas suficientes/.test(e.message));
 
       const invalido = provedor({
         "/autoupload/import": { corpo: { statusCode: -4, errors: ["CATEGORY_INVALID"] } },
       });
-      await assert.rejects(importarAnunciosOlx("t", [{}], invalido.fetcher),
+      await assert.rejects(importarAnunciosOlx(cfgOlx, "t", [{}], invalido.fetcher),
         (e: Error) => e instanceof OrderError && /CATEGORY_INVALID/.test(e.message));
     });
   });
@@ -332,7 +341,7 @@ test("importação de anúncio na OLX", async (t) => {
     await comAmbiente(ambiente, async () => {
       for (const codigo of [-2, -5]) {
         const { fetcher } = provedor({ "/autoupload/import": { corpo: { statusCode: codigo } } });
-        await assert.rejects(importarAnunciosOlx("t", [{}], fetcher),
+        await assert.rejects(importarAnunciosOlx(cfgOlx, "t", [{}], fetcher),
           (e: Error) => e instanceof ProviderTransientError,
           `statusCode ${codigo} precisa voltar para a fila, não desistir`);
       }
@@ -342,7 +351,7 @@ test("importação de anúncio na OLX", async (t) => {
   await t.test("resposta sem statusCode é recusada em vez de passar por sucesso", async () => {
     await comAmbiente(ambiente, async () => {
       const { fetcher } = provedor({ "/autoupload/import": { corpo: { token: "x" } } });
-      await assert.rejects(importarAnunciosOlx("t", [{}], fetcher),
+      await assert.rejects(importarAnunciosOlx(cfgOlx, "t", [{}], fetcher),
         (e: Error) => e instanceof OrderError && /sem statusCode/.test(e.message));
     });
   });
@@ -351,7 +360,7 @@ test("importação de anúncio na OLX", async (t) => {
     await comAmbiente(ambiente, async () => {
       const { fetcher, chamadas } = provedor(importacaoOk);
       const gigante = [{ Body: "x".repeat(1024 * 1024 + 10) }];
-      await assert.rejects(importarAnunciosOlx("t", gigante, fetcher),
+      await assert.rejects(importarAnunciosOlx(cfgOlx, "t", gigante, fetcher),
         (e: Error) => e instanceof OrderError && /KB/.test(e.message));
       // A mensagem do provedor não diz o tamanho, e sem o número ninguém sabe
       // quanto cortar -- por isso a recusa é nossa e não chega a sair.
@@ -369,7 +378,7 @@ test("importação de anúncio na OLX", async (t) => {
           },
         },
       });
-      const consulta = await consultarImportacaoOlx("token-olx", "imp-1", fetcher);
+      const consulta = await consultarImportacaoOlx(cfgOlx, "token-olx", "imp-1", fetcher);
       assert.equal(chamadas[0].metodo, "POST");
       assert.deepEqual(chamadas[0].corpo, { access_token: "token-olx" });
       assert.equal(consulta.geral, "done");
@@ -391,7 +400,7 @@ test("publicação completa na OLX", async (t) => {
         },
         "/autoupload/import": { corpo: { token: "imp-1", statusCode: 0 } },
       });
-      const resultado = await publishOlxAd("token-olx", anuncio(), ANUNCIANTE, fetcher);
+      const resultado = await publishOlxAd(cfgOlx, "token-olx", anuncio(), ANUNCIANTE, fetcher);
       // O identificador é o que NÓS mandamos: é por ele que a OLX casa a
       // próxima edição.
       assert.equal(resultado.externalListingId, "listing-1");
@@ -415,7 +424,7 @@ test("publicação completa na OLX", async (t) => {
         "/autoupload/import": { corpo: { token: "imp-1", statusCode: 0 } },
       });
       // Sem isto o anúncio ficaria marcado como publicado tendo sido rejeitado.
-      await assert.rejects(publishOlxAd("token-olx", anuncio(), ANUNCIANTE, fetcher),
+      await assert.rejects(publishOlxAd(cfgOlx, "token-olx", anuncio(), ANUNCIANTE, fetcher),
         (e: Error) => e instanceof OrderError && /ERROR_IMAGE_TOO_SMALL/.test(e.message));
     });
   });
@@ -428,7 +437,7 @@ test("publicação completa na OLX", async (t) => {
         },
         "/autoupload/import": { corpo: { token: "imp-1", statusCode: 0 } },
       });
-      const resultado = await publishOlxAd("token-olx", anuncio(), ANUNCIANTE, fetcher);
+      const resultado = await publishOlxAd(cfgOlx, "token-olx", anuncio(), ANUNCIANTE, fetcher);
       assert.equal(resultado.externalStatus, "queued");
     });
   });
@@ -439,7 +448,7 @@ test("publicação completa na OLX", async (t) => {
         "/autoupload/import/imp-1": { status: 503, corpo: {} },
         "/autoupload/import": { corpo: { token: "imp-1", statusCode: 0 } },
       });
-      const resultado = await publishOlxAd("token-olx", anuncio(), ANUNCIANTE, fetcher);
+      const resultado = await publishOlxAd(cfgOlx, "token-olx", anuncio(), ANUNCIANTE, fetcher);
       assert.equal(resultado.externalStatus, "queued");
       // A importação fica registrada: é por ela que se descobre o destino depois.
       assert.deepEqual(resultado.sentAttributes,
@@ -451,7 +460,9 @@ test("publicação completa na OLX", async (t) => {
 test("a OLX não tem pedidos, e isso é dito com clareza", async (t) => {
   await t.test("a conciliação recusa nomeando a razão", async () => {
     await assert.rejects(
-      providerLister()(conexao({ accessToken: "cifrado" }), new Date()),
+      // Banco nulo de propósito: a recusa da OLX não tem o que consultar, e
+      // se algum dia ela passar a ir ao banco, este teste quebra.
+      providerLister(semBanco)(conexao({ accessToken: "cifrado" }), new Date()),
       (e: Error) => e instanceof OrderError && /só de publicação/.test(e.message),
       "não é omissão: classificados não têm pedido para conciliar");
   });

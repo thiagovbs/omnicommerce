@@ -38,8 +38,8 @@ export function shopeeRedirectUri(nonce: string) {
   return new URL(`/api/integrations/shopee/callback/${encodeURIComponent(nonce)}`, app).toString();
 }
 
-export function shopeeAuthorizationUrl(nonce: string) {
-  const config = shopeeConfig();
+export function shopeeAuthorizationUrl(cfg: Record<string, string>, nonce: string) {
+  const config = shopeeConfig(cfg);
   const timestamp = agoraEmSegundos();
   const url = new URL(config.host + CAMINHO_AUTORIZACAO);
   url.searchParams.set("partner_id", config.partnerId);
@@ -88,12 +88,12 @@ function lerTokens(conteudo: Record<string, unknown>, shopId: string): ProviderT
  * porque token é justamente o que se está pedindo.
  */
 export async function exchangeShopeeCode(
-  code: string, shopId: string, fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, code: string, shopId: string, fetcher: typeof fetch = fetch,
 ) {
-  const config = shopeeConfig();
+  const config = shopeeConfig(cfg);
   const codigo = textInput(code, "Código de autorização", 500);
   const loja = lerShopId(shopId);
-  const conteudo = await chamarShopee(CAMINHO_TOKEN, {
+  const conteudo = await chamarShopee(cfg, CAMINHO_TOKEN, {
     metodo: "POST",
     corpo: { code: codigo, shop_id: Number(loja), partner_id: Number(config.partnerId) },
     oQueFalhou: "Falha na autorização da Shopee",
@@ -110,12 +110,12 @@ export async function exchangeShopeeCode(
  * autorização de 365 dias numa de 30.
  */
 export async function refreshShopeeToken(
-  refresh: string, shopId: string, fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, refresh: string, shopId: string, fetcher: typeof fetch = fetch,
 ) {
-  const config = shopeeConfig();
+  const config = shopeeConfig(cfg);
   const credencial = textInput(refresh, "Credencial de renovação", 500);
   const loja = lerShopId(shopId);
-  const conteudo = await chamarShopee(CAMINHO_RENOVACAO, {
+  const conteudo = await chamarShopee(cfg, CAMINHO_RENOVACAO, {
     metodo: "POST",
     corpo: { refresh_token: credencial, shop_id: Number(loja), partner_id: Number(config.partnerId) },
     oQueFalhou: "Falha ao renovar a credencial da Shopee",
@@ -148,9 +148,10 @@ export function lerRetornoDeAutorizacao(params: URLSearchParams) {
 /// Dados da loja, para mostrar de quem é a conexão. Não é crítico ao fluxo:
 /// falhar aqui não deve impedir gravar a credencial que já foi obtida.
 export async function fetchShopeeShopInfo(
-  loja: { accessToken: string; shopId: string }, fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, loja: { accessToken: string; shopId: string },
+  fetcher: typeof fetch = fetch,
 ) {
-  const conteudo = await chamarShopee("/api/v2/shop/get_shop_info", {
+  const conteudo = await chamarShopee(cfg, "/api/v2/shop/get_shop_info", {
     loja, oQueFalhou: "Falha ao consultar a loja na Shopee", envelope: false,
   }, fetcher);
   const dados = objectInput(conteudo);

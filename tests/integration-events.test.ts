@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { randomBytes } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
+import { encryptSecret } from "../lib/integrations/crypto";
+import { hashDeBusca } from "../lib/services/marketplaces";
 import { OrderError } from "../lib/domain/order-input";
 import { handleMercadoLivreNotification } from "../lib/integrations/mercadolivre/webhook";
 import {
@@ -9,6 +12,27 @@ import {
 
 const db = new PrismaClient();
 const secret = "segredo-de-webhook-com-32-caracteres";
+
+/// Grava configuração de canal como a tela gravaria. O segredo de webhook
+/// vai cifrado e com hash de busca: é o hash que identifica de qual canal é
+/// o aviso, já que o provedor chama a URL sem dizer de quem ela é.
+async function configurar(marketplaceId: string, valores: Record<string, string>, segredos: string[] = []) {
+  for (const [key, valor] of Object.entries(valores)) {
+    const segredo = segredos.includes(key);
+    await db.marketplaceSetting.upsert({
+      where: { marketplaceId_key: { marketplaceId, key } },
+      update: {
+        value: segredo ? encryptSecret(valor) : valor, secret: segredo,
+        lookupHash: key === "webhookSecret" ? hashDeBusca(valor) : null,
+      },
+      create: {
+        marketplaceId, key,
+        value: segredo ? encryptSecret(valor) : valor, secret: segredo,
+        lookupHash: key === "webhookSecret" ? hashDeBusca(valor) : null,
+      },
+    });
+  }
+}
 const fromPayload: OrderSnapshotResolver = async (event) => event.payload;
 
 const snapshot = (id: string) => ({
@@ -29,16 +53,22 @@ const post = (body: string, path = secret) =>
   }), path);
 
 test("recepção, conexão e teto de tentativas em PostgreSQL", async (t) => {
-  const previousSecret = process.env.MERCADO_LIVRE_WEBHOOK_SECRET;
-  const previousApp = process.env.MERCADO_LIVRE_APP_ID;
+  const previousKey = process.env.INTEGRATION_ENCRYPTION_KEY;
   try {
-    process.env.MERCADO_LIVRE_WEBHOOK_SECRET = secret;
-    delete process.env.MERCADO_LIVRE_APP_ID;
+    // O segredo do webhook é guardado cifrado, como em produção.
+    process.env.INTEGRATION_ENCRYPTION_KEY = randomBytes(32).toString("base64");
 
     const org = await db.organization.create({ data: { name: "Fila A" } });
     const otherOrg = await db.organization.create({ data: { name: "Fila B" } });
-    const channel = await db.marketplace.create({ data: { organizationId: org.id, code: "ml_fila", name: "ML" } });
-    const otherChannel = await db.marketplace.create({ data: { organizationId: otherOrg.id, code: "ml_fila", name: "ML" } });
+    const channel = await db.marketplace.create({ data: {
+      organizationId: org.id, code: "mercado_livre", name: "ML", provider: "MERCADO_LIVRE",
+    } });
+    const otherChannel = await db.marketplace.create({ data: {
+      organizationId: otherOrg.id, code: "mercado_livre", name: "ML", provider: "MERCADO_LIVRE",
+    } });
+    // A configuração é do canal: é ela que faz o aviso ser aceito, e é por
+    // ela que se sabe de qual organização o aviso é.
+    await configurar(channel.id, { webhookSecret: secret }, ["webhookSecret"]);
     const connection = await db.marketplaceConnection.create({ data: {
       marketplaceId: channel.id, provider: "MERCADO_LIVRE", externalAccountId: "777",
     } });
@@ -86,9 +116,12 @@ test("recepção, conexão e teto de tentativas em PostgreSQL", async (t) => {
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { status: "ignored" });
       }
-      process.env.MERCADO_LIVRE_APP_ID = "app-esperado";
+      // Com App ID cadastrado, aviso de OUTRA aplicação é descartado.
+      await configurar(channel.id, { appId: "app-esperado" });
       assert.deepEqual(await (await post(notification())).json(), { status: "ignored" });
-      delete process.env.MERCADO_LIVRE_APP_ID;
+      await db.marketplaceSetting.delete({
+        where: { marketplaceId_key: { marketplaceId: channel.id, key: "appId" } },
+      });
       assert.equal(await db.integrationEvent.count({ where: { marketplaceId: channel.id } }), before);
     });
 
@@ -157,10 +190,8 @@ test("recepção, conexão e teto de tentativas em PostgreSQL", async (t) => {
       assert.equal(await db.sale.count({ where: { externalOrderId: "trans-1" } }), 0);
     });
   } finally {
-    if (previousSecret === undefined) delete process.env.MERCADO_LIVRE_WEBHOOK_SECRET;
-    else process.env.MERCADO_LIVRE_WEBHOOK_SECRET = previousSecret;
-    if (previousApp === undefined) delete process.env.MERCADO_LIVRE_APP_ID;
-    else process.env.MERCADO_LIVRE_APP_ID = previousApp;
+    if (previousKey === undefined) delete process.env.INTEGRATION_ENCRYPTION_KEY;
+    else process.env.INTEGRATION_ENCRYPTION_KEY = previousKey;
     await db.$disconnect();
   }
 });

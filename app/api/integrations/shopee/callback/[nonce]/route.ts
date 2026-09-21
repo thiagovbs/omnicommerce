@@ -5,6 +5,7 @@ import { OrderError } from "@/lib/domain/order-input";
 import { isOrgAdmin } from "@/lib/domain/roles";
 import { assertContaEsperada, lerEstado, STATE_COOKIE } from "@/lib/integrations/oauth-state";
 import { exchangeShopeeCode, lerRetornoDeAutorizacao } from "@/lib/integrations/shopee/oauth";
+import { marketplaceSettings } from "@/lib/services/marketplaces";
 import { prisma } from "@/lib/prisma";
 import { saveProviderConnection } from "@/lib/services/connections";
 
@@ -35,7 +36,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ nonc
 
     const { code, shopId } = lerRetornoDeAutorizacao(new URL(request.url).searchParams);
     assertContaEsperada(estado, shopId);
-    const tokens = await exchangeShopeeCode(code, shopId);
+    // A mesma configuração que montou a autorização fecha a troca do código.
+    const cfg = await marketplaceSettings(prisma, estado.marketplaceId);
+    const tokens = await exchangeShopeeCode(cfg, code, shopId);
     await saveProviderConnection(prisma, actor, {
       provider: "SHOPEE",
       marketplaceId: estado.marketplaceId,

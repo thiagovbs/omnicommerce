@@ -44,32 +44,41 @@ export interface ShopeeConfig {
   sandbox: boolean;
 }
 
-export function shopeeConfig(): ShopeeConfig {
-  const { SHOPEE_PARTNER_ID, SHOPEE_PARTNER_KEY } = process.env;
-  const ausentes = Object.entries({ SHOPEE_PARTNER_ID, SHOPEE_PARTNER_KEY })
-    .filter(([, valor]) => !valor).map(([nome]) => nome);
+/**
+ * Configuração da aplicação Shopee, vinda do cadastro do CANAL.
+ *
+ * Era variável de ambiente, e por isso uma aplicação servia todas as
+ * organizações do mesmo deploy. Agora cada organização cadastra o partner dela
+ * na tela de Marketplaces, e `cfg` é o conteúdo daquele cadastro.
+ */
+export function shopeeConfig(cfg: Record<string, string>): ShopeeConfig {
+  const ausentes = [
+    cfg.partnerId ? null : "Partner ID",
+    cfg.partnerKey ? null : "Partner Key",
+  ].filter(Boolean);
   if (ausentes.length) {
-    throw new ShopeeConfigurationError(`Shopee não configurada: ${ausentes.join(", ")}.`);
+    throw new ShopeeConfigurationError(
+      `Shopee não configurada: ${ausentes.join(", ")}. Preencha na tela de Marketplaces.`);
   }
   // O partner_id entra na assinatura como número e na URL como texto: se vier
   // com espaço ou letra, a assinatura sai diferente da que o provedor calcula
   // e o erro chega como "error_sign", que não diz nada sobre a causa.
-  if (!/^\d{1,20}$/.test(SHOPEE_PARTNER_ID!)) {
-    throw new ShopeeConfigurationError("SHOPEE_PARTNER_ID deve ser numérico.");
+  if (!/^\d{1,20}$/.test(cfg.partnerId)) {
+    throw new ShopeeConfigurationError("Partner ID deve ser numérico.");
   }
-  const sandbox = process.env.SHOPEE_SANDBOX === "true";
-  const host = (process.env.SHOPEE_HOST ?? (sandbox ? HOST_SANDBOX : HOST_PRODUCAO)).replace(/\/+$/, "");
+  const sandbox = cfg.sandbox === "true";
+  const host = (cfg.host || (sandbox ? HOST_SANDBOX : HOST_PRODUCAO)).replace(/\/+$/, "");
   let url: URL;
-  try { url = new URL(host); } catch { throw new ShopeeConfigurationError("SHOPEE_HOST inválido."); }
+  try { url = new URL(host); } catch { throw new ShopeeConfigurationError("Host da API inválido."); }
   if (url.protocol !== "https:" || url.search || url.hash || url.username) {
-    throw new ShopeeConfigurationError("SHOPEE_HOST inválido.");
+    throw new ShopeeConfigurationError("Host da API inválido.");
   }
-  return { partnerId: SHOPEE_PARTNER_ID!, partnerKey: SHOPEE_PARTNER_KEY!, host, sandbox };
+  return { partnerId: cfg.partnerId, partnerKey: cfg.partnerKey, host, sandbox };
 }
 
 /// Para a tela decidir se oferece o botão, em vez de deixar o clique cair num 500.
-export function shopeeConfigured() {
-  try { shopeeConfig(); return true; } catch { return false; }
+export function shopeeConfigured(cfg: Record<string, string>) {
+  try { shopeeConfig(cfg); return true; } catch { return false; }
 }
 
 /**
@@ -167,6 +176,7 @@ export function conteudoShopee(corpo: Record<string, unknown>, oQueFalhou: strin
 }
 
 export async function chamarShopee(
+  cfg: Record<string, string>,
   path: string,
   opcoes: {
     metodo?: "GET" | "POST";
@@ -183,7 +193,7 @@ export async function chamarShopee(
   },
   fetcher: typeof fetch = fetch,
 ) {
-  const config = shopeeConfig();
+  const config = shopeeConfig(cfg);
   const metodo = opcoes.metodo ?? "GET";
   const response = await fetcher(urlAssinada(config, path, opcoes.loja, opcoes.query ?? {}), {
     method: metodo,
@@ -209,9 +219,11 @@ export async function chamarShopee(
  * o JSON reordena chaves e muda espaços, e a assinatura passa a não bater por
  * um motivo que não aparece em lugar nenhum.
  */
-export function assinaturaDePushValida(url: string, corpoCru: string, assinatura: string) {
+export function assinaturaDePushValida(
+  cfg: Record<string, string>, url: string, corpoCru: string, assinatura: string,
+) {
   let config: ShopeeConfig;
-  try { config = shopeeConfig(); } catch { return false; }
+  try { config = shopeeConfig(cfg); } catch { return false; }
   const esperada = createHmac("sha256", config.partnerKey).update(url + corpoCru).digest("hex");
   const a = Buffer.from(assinatura.trim().toLowerCase());
   const b = Buffer.from(esperada);
@@ -225,10 +237,11 @@ export function assinaturaDePushValida(url: string, corpoCru: string, assinatura
  * `externalOrderId` do evento é guardado como texto em todo o sistema.
  */
 export async function fetchShopeeOrder(
-  loja: ShopeeCredenciais, orderSn: string, fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, loja: ShopeeCredenciais, orderSn: string,
+  fetcher: typeof fetch = fetch,
 ) {
   const numero = textInput(orderSn, "Pedido externo", 80);
-  const conteudo = await chamarShopee("/api/v2/order/get_order_detail", {
+  const conteudo = await chamarShopee(cfg, "/api/v2/order/get_order_detail", {
     loja,
     query: {
       order_sn_list: numero,
@@ -252,7 +265,8 @@ export async function fetchShopeeOrder(
  * isto com a própria marca d'água, que já tem sobreposição.
  */
 export async function listChangedShopeeOrders(
-  loja: ShopeeCredenciais, desde: Date, fetcher: typeof fetch = fetch,
+  cfg: Record<string, string>, loja: ShopeeCredenciais, desde: Date,
+  fetcher: typeof fetch = fetch,
 ) {
   const JANELA_MAXIMA_S = 15 * 24 * 60 * 60;
   const agora = agoraEmSegundos();
@@ -263,7 +277,7 @@ export async function listChangedShopeeOrders(
   // Paginação por cursor, com teto: sem o teto, uma resposta que sempre diz
   // "tem mais" prenderia a rodada da conciliação para sempre.
   for (let pagina = 0; pagina < 20; pagina++) {
-    const conteudo = await chamarShopee("/api/v2/order/get_order_list", {
+    const conteudo = await chamarShopee(cfg, "/api/v2/order/get_order_list", {
       loja,
       query: {
         time_range_field: "update_time",

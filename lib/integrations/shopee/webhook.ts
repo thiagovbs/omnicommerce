@@ -1,7 +1,7 @@
 import "server-only";
 import { PrismaClient } from "@prisma/client";
 import { assinaturaDePushValida } from "./client";
-import { handleProviderNotification } from "../webhook";
+import { configDoAviso, handleProviderNotification } from "../webhook";
 import { parseShopeeNotification } from "./notification";
 
 /**
@@ -16,18 +16,22 @@ import { parseShopeeNotification } from "./notification";
  * aqui derrubaria TODO aviso com 404, com o sintoma de "nenhum pedido chegou",
  * que é o defeito mais caro que já tivemos (a URL truncada em 120 caracteres no
  * DevCenter do Mercado Livre custou um dia). Então a conferência é opcional e
- * nasce desligada: ligue `SHOPEE_VERIFY_PUSH=true` depois de ver aviso chegando.
+ * nasce desligada: ligue "Conferir assinatura do push" na tela de Marketplaces
+ * depois de ver aviso chegando.
  */
 export async function handleShopeeNotification(db: PrismaClient, request: Request, secret: string) {
+  const canal = await configDoAviso(db, "SHOPEE", secret);
+  if (!canal) return new Response("Not found", { status: 404 });
+
   return handleProviderNotification(db, request, secret, {
     provider: "SHOPEE",
-    secret: process.env.SHOPEE_WEBHOOK_SECRET,
-    assinatura: process.env.SHOPEE_VERIFY_PUSH === "true"
+    secret: canal.cfg.webhookSecret,
+    assinatura: canal.cfg.verifyPush === "true"
       ? (corpoCru, req) => {
         const assinatura = req.headers.get("authorization") ?? "";
         // O endereço que entra no cálculo é o que a Shopee chamou, sem query.
         const url = new URL(req.url);
-        return assinaturaDePushValida(url.origin + url.pathname, corpoCru, assinatura);
+        return assinaturaDePushValida(canal.cfg, url.origin + url.pathname, corpoCru, assinatura);
       }
       : undefined,
     parse: (body) => {

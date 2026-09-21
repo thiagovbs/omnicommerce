@@ -1,11 +1,9 @@
 import { redirect } from "next/navigation";
 import { format } from "date-fns";
 import { currentActor } from "@/lib/current-actor";
-import { providerDoCanal } from "@/lib/domain/marketplace-provider";
+import { MarketplaceProvider } from "@prisma/client";
 import { isOrgAdmin } from "@/lib/domain/roles";
-import { oauthConfigured } from "@/lib/integrations/mercadolivre/oauth";
-import { olxOauthConfigured } from "@/lib/integrations/olx/oauth";
-import { shopeeConfig, shopeeConfigured } from "@/lib/integrations/shopee/client";
+import { faltaParaConfigurar } from "@/lib/domain/marketplace-config";
 import { prisma } from "@/lib/prisma";
 import { RetryButton } from "./retry-button";
 
@@ -24,22 +22,39 @@ const providerNames = {
  * fluxo de autorização. O Sebo On-Line fica de fora porque a credencial dele é
  * token de serviço, registrado por script -- não há tela a oferecer.
  *
- * `variaveis` existe para o aviso de indisponível dizer O QUE falta. Sem isso,
- * o botão simplesmente não aparece e ninguém sabe por quê.
+ * O que falta para cada canal não está mais escrito aqui: vem do catálogo de
+ * campos por provedor, o mesmo que a tela de Marketplaces usa. Antes eram nomes
+ * de variável de ambiente, que não diziam nada a quem só tem acesso à tela.
  */
 const oauthPorProvedor = {
-  MERCADO_LIVRE: {
-    rota: "mercadolivre",
-    variaveis: "MERCADO_LIVRE_APP_ID e MERCADO_LIVRE_APP_SECRET",
-  },
-  SHOPEE: { rota: "shopee", variaveis: "SHOPEE_PARTNER_ID e SHOPEE_PARTNER_KEY" },
-  OLX: { rota: "olx", variaveis: "OLX_CLIENT_ID e OLX_CLIENT_SECRET" },
+  MERCADO_LIVRE: { rota: "mercadolivre" },
+  SHOPEE: { rota: "shopee" },
+  OLX: { rota: "olx" },
 } as const;
 
 type ProvedorComOauth = keyof typeof oauthPorProvedor;
 
 function temOauth(provider: string): provider is ProvedorComOauth {
   return provider in oauthPorProvedor;
+}
+
+/// Canal como esta tela o lê: provedor mais as CHAVES configuradas.
+interface CanalDaTela {
+  provider: MarketplaceProvider | null;
+  settings: { key: string; value: string; secret: boolean }[];
+}
+
+/// O que falta preencher, em rótulo de tela. Olha apenas quais chaves existem
+/// -- não precisa do valor de nenhuma credencial para responder.
+function falta(canal: CanalDaTela): string[] {
+  if (!canal.provider) return [];
+  return faltaParaConfigurar(canal.provider, canal.settings.map((s) => s.key));
+}
+
+/// Sandbox não é segredo, e é o que diferencia anúncio de teste de anúncio de
+/// verdade nesta tela.
+function ehSandbox(canal: CanalDaTela): boolean {
+  return canal.settings.some((s) => !s.secret && s.key === "sandbox" && s.value === "true");
 }
 
 export default async function IntegrationsPage({
@@ -50,26 +65,21 @@ export default async function IntegrationsPage({
   const actor = await currentActor();
   if (!isOrgAdmin(actor.role)) redirect("/dashboard");
   const aviso = await searchParams;
-  const disponivel: Record<ProvedorComOauth, boolean> = {
-    MERCADO_LIVRE: oauthConfigured(),
-    SHOPEE: shopeeConfigured(),
-    OLX: olxOauthConfigured(),
-  };
-  // Sandbox é informação de tela: sem ela, anúncio de teste e anúncio de
-  // verdade ficam com a mesma aparência aqui.
-  let shopeeSandbox = false;
-  try { shopeeSandbox = shopeeConfig().sandbox; } catch { shopeeSandbox = false; }
 
   const [marketplaces, events] = await Promise.all([
     prisma.marketplace.findMany({
       where: { organizationId: actor.organizationId, active: true },
       orderBy: { name: "asc" },
       select: {
-        id: true, name: true, code: true,
+        id: true, name: true, code: true, provider: true,
         connections: {
           orderBy: { createdAt: "asc" },
           select: { id: true, provider: true, externalAccountId: true, status: true, expiresAt: true, lastSyncedAt: true },
         },
+        // Só a CHAVE e o valor do que não é segredo: a tela precisa saber o
+        // que está preenchido e se a Shopee aponta para o sandbox, e não
+        // precisa ver credencial nenhuma para isso.
+        settings: { select: { key: true, value: true, secret: true } },
       },
     }),
     prisma.integrationEvent.findMany({
@@ -99,16 +109,22 @@ export default async function IntegrationsPage({
     <p className="mt-1 mb-4 text-sm text-gray-500">
       Cada conexão é uma loja autorizada. É ela que diz de qual organização é o pedido que chega.
     </p>
-    {Object.entries(oauthPorProvedor)
-      .filter(([provider]) => !disponivel[provider as ProvedorComOauth])
-      .map(([provider, { variaveis }]) => <p key={provider} className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-        A autorização do {providerNames[provider as ProvedorComOauth]} está indisponível: falta
-        configurar <span className="font-mono">{variaveis}</span> no ambiente.
+    {/* O aviso é POR CANAL, porque a configuração é do canal: numa plataforma
+        com várias organizações, o Mercado Livre de uma pode estar configurado
+        e o da outra não. E o que falta é nomeado com o rótulo da tela, não com
+        o nome de uma variável de ambiente que ninguém tem acesso. */}
+    {marketplaces
+      .filter((m) => m.provider && temOauth(m.provider) && falta(m).length > 0)
+      .map((m) => <p key={m.id} className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+        A autorização de {m.name} está indisponível: falta preencher{" "}
+        <strong>{falta(m).join(", ")}</strong> em{" "}
+        <a href="/marketplaces" className="underline">Marketplaces</a>.
       </p>)}
-    {shopeeSandbox && <p className="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-800">
-      A Shopee está apontada para o <strong>sandbox</strong>. Anúncio publicado aqui não
-      aparece na loja real.
-    </p>}
+    {marketplaces.some((m) => m.provider === "SHOPEE" && ehSandbox(m))
+      && <p className="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-800">
+        A Shopee está apontada para o <strong>sandbox</strong>. Anúncio publicado aqui não
+        aparece na loja real.
+      </p>}
     <div className="overflow-x-auto rounded-xl border bg-white">
       <table className="w-full text-left text-sm">
         <thead className="border-b bg-gray-50"><tr>
@@ -131,7 +147,7 @@ export default async function IntegrationsPage({
                 {/* Reautorização é POR CONTA: com duas contas no mesmo canal,
                     um botão só não diz qual delas renovar -- e a que o
                     provedor devolve é a que estiver logada nele. */}
-                {temOauth(connection.provider) && disponivel[connection.provider] && <a
+                {temOauth(connection.provider) && !falta(marketplace).length && <a
                   href={`/api/integrations/${oauthPorProvedor[connection.provider].rota}/authorize?marketplaceId=${marketplace.id}&connectionId=${connection.id}`}
                   className="mt-1 inline-block text-xs text-blue-700 underline hover:text-blue-900"
                 >
@@ -141,11 +157,13 @@ export default async function IntegrationsPage({
           </td>
           <td className="p-4 align-top">
             {(() => {
-              const provider = providerDoCanal(marketplace.code);
+              const provider = marketplace.provider;
               // Canal sem provedor de OAuth não tem o que oferecer aqui: ou não
               // tem integração, ou a credencial dele não nasce de autorização.
               if (!provider || !temOauth(provider)) return <span className="text-gray-400">—</span>;
-              if (!disponivel[provider]) return <span className="text-gray-400">Indisponível</span>;
+              // Sem as credenciais do canal, o clique cairia num 500. O aviso
+              // acima já diz o que preencher.
+              if (falta(marketplace).length) return <span className="text-gray-400">Indisponível</span>;
               const jaTem = marketplace.connections.some((c) => c.provider === provider);
               return <a
                 href={`/api/integrations/${oauthPorProvedor[provider].rota}/authorize?marketplaceId=${marketplace.id}`}
