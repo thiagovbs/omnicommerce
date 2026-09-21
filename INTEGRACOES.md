@@ -147,6 +147,33 @@ e leva para o banco o que ainda não estiver lá, **sem sobrescrever** o que foi
 digitado na tela. É idempotente e não derruba o build: falhar ali deixa a tela
 dizendo o que falta, o que é melhor que um deploy que não sai.
 
+## Histórico por tentativa
+
+A listagem de eventos mostrava `lastError`, que é **sobrescrito**: um evento com
+oito tentativas exibia só o motivo da oitava. E quando a falha era transitória
+nem isso, porque a coluna recebia o código genérico `PROCESSING_FAILED` e a
+razão real se perdia. A pergunta "por que ESTE pedido não entrou?" não tinha
+resposta no sistema.
+
+`IntegrationEventAttempt` grava uma linha por tentativa, das duas metades da
+jornada -- processar o aviso e entregar o resultado na fila --, com o resultado
+(sucesso, falha temporária, falha definitiva), a duração e o erro. A tela fica
+em `/integrations/events/[id]`, com link em cada linha da listagem.
+
+O que entra no campo de erro segue a regra que o despacho da fila já aplicava:
+**mensagem de terceiro não é registrada**, porque pode carregar cabeçalho, URL
+assinada ou credencial -- e credencial que apareceu num log precisa ser trocada
+no provedor. Entra sempre o NOME DA CLASSE, que é seguro e é o que separa
+`TypeError` (defeito nosso) de `ProviderTransientError` (o provedor caiu) de
+`PrismaClientKnownRequestError` (o banco recusou); a mensagem entra apenas
+quando o erro é nosso. A duração acompanha porque falha em 30 s é timeout e
+falha em 30 ms é recusa, e as duas pedem investigação diferente.
+
+Registrar histórico nunca derruba o processamento: o registro do sucesso vai na
+mesma transação do resultado (um histórico dizendo "deu certo" sobre um evento
+que não concluiu seria pior que nenhum), e a falha em gravar é engolida -- o
+histórico existe para explicar o que aconteceu, não para decidir se acontece.
+
 ## Jornada validada em produção
 
 Compra real no Sebo On-Line, 18/09/2026:

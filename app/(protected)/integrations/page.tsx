@@ -181,7 +181,7 @@ export default async function IntegrationsPage({
     </div>
 
     <h2 className="mt-10 text-xl font-semibold">Eventos</h2>
-    <p className="mt-1 mb-4 text-sm text-gray-500">Últimos 50 eventos de pedidos desta organização. O reprocessamento agenda uma nova tentativa de entrega.</p>
+    <p className="mt-1 mb-4 text-sm text-gray-500">Últimos 50 eventos de pedidos desta organização. A coluna de processamento mostra a ÚLTIMA falha; o histórico de cada evento mostra tentativa por tentativa. O reprocessamento agenda uma nova tentativa de entrega.</p>
     {!events.length ? <div className="rounded-xl border bg-white p-8 text-gray-500">Nenhum evento recebido. Os eventos aparecerão após configurar uma integração.</div> :
       <div className="overflow-x-auto rounded-xl border bg-white">
         <table className="w-full text-left text-sm">
@@ -190,8 +190,13 @@ export default async function IntegrationsPage({
             <td className="p-4">{format(event.receivedAt, "dd/MM/yyyy HH:mm:ss")}</td>
             <td className="p-4">{event.marketplace.name}<div className="font-mono text-xs">{event.externalOrderId}</div></td>
             <td className="p-4">{statuses[event.status]}<div className="text-xs text-gray-500">Tentativas: {event.attempts}</div>{event.lastError && <div className="max-w-xs text-xs text-red-600">{event.lastError}</div>}</td>
-            <td className="p-4">{event.outbox ? deliveryStatuses[event.outbox.status] : "Sem envio"}{event.outbox?.lastError && <div className="text-xs text-red-600">Não foi possível publicar.</div>}</td>
-            <td className="p-4">{event.status !== "PROCESSED" && event.status !== "IGNORED" && <RetryButton eventId={event.id} />}</td>
+            <td className="p-4">{event.outbox ? deliveryStatuses[event.outbox.status] : "Sem envio"}{event.outbox?.lastError && <div className="font-mono text-xs text-red-600">{event.outbox.lastError}</div>}</td>
+            <td className="p-4">
+              {/* O histórico é o caminho para "por que ESTE não entrou": a
+                  coluna de erro guarda só a última tentativa. */}
+              <a href={`/integrations/events/${event.id}`} className="text-blue-700 underline hover:text-blue-900">Histórico</a>
+              {event.status !== "PROCESSED" && event.status !== "IGNORED" && <div className="mt-2"><RetryButton eventId={event.id} /></div>}
+            </td>
           </tr>)}</tbody>
         </table>
       </div>}

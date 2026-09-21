@@ -4,6 +4,7 @@ import { PrismaClient } from "@prisma/client";
 import { OrderError } from "../domain/order-input";
 import { isOrgAdmin } from "../domain/roles";
 import { assertActor, UserActor } from "./actor";
+import { registrarTentativa } from "./event-history";
 import { serializable } from "./transactions";
 
 export type EventPublisher = (message: { eventId: string; deduplicationId: string }) => Promise<void>;
@@ -25,6 +26,7 @@ export async function dispatchOutbox(db: PrismaClient, publish: EventPublisher, 
       OR: [{ leaseUntil: null }, { leaseUntil: { lte: claimTime } }],
     }, data: { leaseToken, leaseUntil: new Date(claimTime.getTime() + 60000), attempts: { increment: 1 } } });
     if (!claim.count) continue;
+    const comecou = Date.now();
     try {
       // Separador com underscore: o QStash recusa dois-pontos no id de deduplicação.
       await publish({ eventId: message.eventId, deduplicationId: message.id + "_" + leaseToken });
@@ -32,6 +34,10 @@ export async function dispatchOutbox(db: PrismaClient, publish: EventPublisher, 
         status: "PUBLISHED", publishedAt: new Date(), leaseUntil: null, leaseToken: null, lastError: null,
       } });
       published += result.count;
+      await registrarTentativa(db, {
+        eventId: message.eventId, number: message.attempts + 1, kind: "DELIVERY",
+        outcome: "OK", durationMs: Date.now() - comecou,
+      });
     } catch (error) {
       // Só códigos nossos entram no registro: mensagem de terceiro pode carregar
       // cabeçalho ou credencial.
@@ -42,6 +48,13 @@ export async function dispatchOutbox(db: PrismaClient, publish: EventPublisher, 
         availableAt: new Date(Date.now() + Math.min(3600000, 1000 * 2 ** (message.attempts + 1))),
         lastError: motivo,
       } });
+      // A entrega não distingue permanente de transitória: ela repete até o
+      // teto. Registrada como transitória até a última, que é a que para.
+      await registrarTentativa(db, {
+        eventId: message.eventId, number: message.attempts + 1, kind: "DELIVERY",
+        outcome: message.attempts + 1 >= 8 ? "PERMANENT" : "TRANSIENT",
+        durationMs: Date.now() - comecou, error,
+      });
       failed++;
     }
   }

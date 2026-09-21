@@ -70,6 +70,22 @@ enum OutboxStatus {
   FAILED
 }
 
+/// Em qual metade da jornada a tentativa aconteceu: processar o aviso (falar
+/// com o provedor e aplicar a venda) ou entregar o resultado na fila.
+enum AttemptKind {
+  PROCESSING
+  DELIVERY
+}
+
+/// Como a tentativa terminou. A distinção entre transitória e permanente é a
+/// mesma que o trabalhador usa para decidir entre repetir e parar -- registrá-la
+/// é o que permite olhar um evento e saber se ainda há esperança.
+enum AttemptOutcome {
+  OK
+  TRANSIENT
+  PERMANENT
+}
+
 /// Por que o estoque mudou. Sem isso, uma baixa por venda seria
 /// indistinguível de um ajuste manual no histórico.
 enum StockMovementReason {
@@ -349,6 +365,8 @@ model IntegrationEvent {
   connection      MarketplaceConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
   outbox          OutboxMessage?
   auditLogs       AuditLog[]
+  /// Histórico. `attempts` acima é a contagem; isto é o registro de cada uma.
+  attemptLog      IntegrationEventAttempt[]
 
   @@unique([marketplaceId, externalEventId])
   @@index([marketplaceId, externalOrderId])
@@ -358,6 +376,39 @@ model IntegrationEvent {
 
 /// One authorized seller account on a provider. Credentials are stored encrypted and are
 /// never sent to the browser; the organization is resolved through the marketplace.
+/// Uma linha por tentativa, de processamento ou de entrega.
+///
+/// Existe porque `IntegrationEvent.lastError` guarda só a ÚLTIMA falha, e
+/// sobrescreve: um evento que falhou oito vezes por motivos diferentes
+/// mostrava apenas o motivo da oitava. Pior, falha transitória gravava o código
+/// genérico `PROCESSING_FAILED` e a razão real se perdia -- então "por que este
+/// pedido não entrou?" não tinha resposta no sistema.
+///
+/// O que entra em `error` segue a regra que o resto do código já aplica:
+/// mensagem NOSSA é registrada; mensagem de terceiro não, porque pode carregar
+/// cabeçalho ou credencial. `errorClass` entra sempre, porque o nome da classe
+/// é seguro e distingue rede de defeito nosso de recusa do provedor.
+model IntegrationEventAttempt {
+  id       String         @id @default(cuid())
+  eventId  String
+  /// Contagem da tentativa DENTRO do seu tipo, como o trabalhador a conta.
+  number   Int
+  kind     AttemptKind
+  outcome  AttemptOutcome
+  /// Mensagem, só quando é de erro nosso. Truncada: o histórico é para ler.
+  error    String?
+  /// Nome da classe do erro. Seguro, e é o que separa `TypeError` (defeito
+  /// nosso) de `ProviderTransientError` (o provedor caiu).
+  errorClass String?
+  /// Quanto a tentativa levou. Uma falha em 30 s é timeout; em 30 ms, recusa.
+  durationMs Int?
+  at       DateTime       @default(now())
+
+  event IntegrationEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, at])
+}
+
 model MarketplaceConnection {
   id                String              @id @default(cuid())
   marketplaceId     String

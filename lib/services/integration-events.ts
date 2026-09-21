@@ -2,6 +2,7 @@ import "server-only";
 import { MarketplaceConnection, Prisma, PrismaClient } from "@prisma/client";
 import { objectInput, OrderError, parseIntegratedOrder, textInput } from "../domain/order-input";
 import { applyIntegratedOrder } from "./sales";
+import { registrarTentativa } from "./event-history";
 import { serializable } from "./transactions";
 
 // After this many attempts the event stops being retried and waits for an operator,
@@ -87,6 +88,7 @@ export async function processOrderEvent(db: PrismaClient, eventId: string, resol
     return (await db.integrationEvent.findUniqueOrThrow({ where: { id: eventId }, select: { status: true } })).status;
   }
   const attempts = event.attempts + 1;
+  const comecou = Date.now();
 
   try {
     if (!event.marketplace.active) throw new OrderError("Marketplace inativo.");
@@ -115,14 +117,28 @@ export async function processOrderEvent(db: PrismaClient, eventId: string, resol
           where: { id: event.connectionId }, data: { lastSyncedAt: new Date() },
         });
       }
+      // Na mesma transação do sucesso: um histórico que diz "deu certo"
+      // sobre um evento que não concluiu seria pior que não ter histórico.
+      await registrarTentativa(tx, {
+        eventId, number: attempts, kind: "PROCESSING", outcome: "OK",
+        durationMs: Date.now() - comecou,
+      });
       return outcome;
     });
   } catch (error) {
     const permanent = error instanceof OrderError;
     await db.integrationEvent.updateMany({ where: { id: eventId, status: "PENDING" }, data: {
       status: permanent || attempts >= MAX_PROCESSING_ATTEMPTS ? "FAILED" : "PENDING",
+      // Continua só o código nosso aqui: esta coluna é sobrescrita e vai
+      // para a listagem. O motivo desta tentativa, com a classe do erro,
+      // fica no histórico, que não se sobrescreve.
       lastError: permanent ? error.message : "PROCESSING_FAILED",
     } });
+    await registrarTentativa(db, {
+      eventId, number: attempts, kind: "PROCESSING",
+      outcome: permanent ? "PERMANENT" : "TRANSIENT",
+      durationMs: Date.now() - comecou, error,
+    });
     throw error;
   }
 }
