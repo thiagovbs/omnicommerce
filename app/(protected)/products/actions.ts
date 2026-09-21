@@ -8,6 +8,7 @@ import { providerPublisher } from "@/lib/integrations/publish";
 import {
   listCategoryChildren, listCategoryTrees, searchCategories, setListingCategory, syncAllCategories,
 } from "@/lib/services/categories";
+import { listListingAttributes, setListingAttributes } from "@/lib/services/listing-attributes";
 import { requestPublication, syncListings } from "@/lib/services/listings";
 import { createProduct, setProductStock, updateProduct } from "@/lib/services/products";
 
@@ -202,6 +203,34 @@ export async function importarCategorias() {
   await currentActor();
   try {
     return { ok: true as const, ...(await syncAllCategories(prisma)) };
+  } catch (erro) {
+    return { ok: false as const, erro: mensagem(erro) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Atributos exigidos pela categoria
+// ---------------------------------------------------------------------------
+
+/// O que a categoria escolhida exige, com o que já está preenchido. A
+/// definição vem do provedor: são 12 mil categorias, cada uma com as suas.
+export async function atributosDaCategoria(productId: string, marketplaceId: string) {
+  const actor = await currentActor();
+  try {
+    return { ok: true as const, ...(await listListingAttributes(prisma, actor, productId, marketplaceId)) };
+  } catch (erro) {
+    return { ok: false as const, erro: mensagem(erro) };
+  }
+}
+
+export async function salvarAtributos(
+  productId: string, marketplaceId: string, valores: Record<string, string>,
+) {
+  const actor = await currentActor();
+  try {
+    const resultado = await setListingAttributes(prisma, actor, productId, marketplaceId, valores);
+    revalidatePath("/products");
+    return { ok: true as const, ...resultado };
   } catch (erro) {
     return { ok: false as const, erro: mensagem(erro) };
   }

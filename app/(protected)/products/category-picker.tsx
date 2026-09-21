@@ -5,6 +5,7 @@ import { Check, ChevronRight, Loader2, RefreshCw, Search, X } from "lucide-react
 import {
   buscarCategorias, canaisComCategoria, definirCategoria, filhosDaCategoria, importarCategorias,
 } from "./actions";
+import { AttributeFields } from "./attribute-fields";
 import type { ProductRow } from "./types";
 
 interface No {
@@ -274,6 +275,11 @@ export function CategoryPicker({ produto }: { produto: ProductRow }) {
             Só a subcategoria final recebe anúncio — as intermediárias servem para navegar.
             A escolha vale para este canal; outros canais têm a própria.
           </p>
+
+          {/* A chave remonta o componente quando o canal muda: os atributos são
+              da categoria daquele canal, e reaproveitar o estado misturaria os
+              valores de um canal com as definições de outro. */}
+          <AttributeFields key={`${produto.id}:${canal}`} productId={produto.id} marketplaceId={canal} />
         </>
       )}
 

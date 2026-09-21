@@ -389,6 +389,15 @@ model Listing {
   externalStatus       String?
   publishedPrice       Decimal?      @db.Decimal(14, 2)
   publishedStock       Int?
+  /// Os atributos que foram efetivamente ENVIADOS na última publicação.
+  ///
+  /// Legível, diferente da impressão, e por isso é o que responde "o que
+  /// exatamente mandamos?" quando o provedor recusa. Inclui o que derivamos do
+  /// produto (marca, modelo, motivo de GTIN vazio), não só o que foi digitado
+  /// -- e é justamente essa diferença que costuma explicar a recusa.
+  ///
+  /// Só os atributos: o payload inteiro carregaria as imagens em base64.
+  publishedAttributes  Json?
   /// Impressão de TUDO que foi enviado ao provedor na última publicação.
   ///
   /// Uma impressão só, e não um campo por atributo, porque a comparação campo
@@ -401,6 +410,15 @@ model Listing {
   /// Guarda a impressão e não os valores porque uma imagem enviada é um data
   /// URI de megabytes.
   publishedFingerprint String?
+  /// Atributos que a categoria do provedor exige, preenchidos por quem cadastra.
+  ///
+  /// Mapa de identificador do atributo para o valor, na forma que o provedor
+  /// espera: `{ "GENDER": { "valueId": "339665" }, "COLOR": { "valueName": "Azul" } }`.
+  /// Lista fechada precisa do id; texto livre vai pelo nome.
+  ///
+  /// Mora no anúncio porque os atributos são da CATEGORIA, e a categoria é por
+  /// canal: o mesmo produto pode exigir GENDER no Mercado Livre e nada no sebo.
+  attributes           Json?
   /// Categoria escolhida neste canal, no identificador do provedor.
   ///
   /// Mora no anúncio porque é por canal: o mesmo produto pode ser "Livros" no

@@ -1,10 +1,11 @@
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
-import { Listing, PrismaClient, Product, ProductImage } from "@prisma/client";
+import { Listing, Prisma, PrismaClient, Product, ProductImage } from "@prisma/client";
 import { providerDoCanal } from "../domain/marketplace-provider";
 import { OrderError, textInput } from "../domain/order-input";
 import { assertOrgAdmin } from "./access";
 import { UserActor } from "./actor";
+import { atributosCanonicos, lerAtributos } from "./listing-attributes";
 import { serializable } from "./transactions";
 
 /**
@@ -40,6 +41,10 @@ export interface PublishResult {
   stock: number;
   /// Estado com as palavras do provedor. Ausente quando ele não reporta um.
   externalStatus?: string | null;
+  /// Atributos que o adapter enviou. Ausente quando a operação não os envia --
+  /// uma atualização de preço e estoque, por exemplo -- e aí o que já estava
+  /// registrado é preservado em vez de virar nulo.
+  sentAttributes?: unknown;
 }
 
 export type ListingPublisher = (listing: ListingWithProduct) => Promise<PublishResult>;
@@ -177,6 +182,11 @@ export function fingerprintDe(listing: ListingWithProduct) {
     p.price.toFixed(2), p.currency, p.stock,
     p.images.map((i) => i.url),
     listing.categoryExternalId,
+    // Atributos entram porque vão no payload. Ficar de fora foi exatamente o
+    // que já aconteceu com as imagens e com o título. Em forma canônica,
+    // porque JSONB devolve as chaves em ordem própria e a impressão não pode
+    // depender dela.
+    atributosCanonicos(lerAtributos(listing.attributes)),
   ])).digest("hex");
 }
 
@@ -272,6 +282,9 @@ export async function syncListings(
           // Informativo: diz qual categoria está de fato no canal.
           publishedCategoryId: listing.categoryExternalId,
           externalStatus: resultado.externalStatus ?? null,
+          ...(resultado.sentAttributes === undefined
+            ? {}
+            : { publishedAttributes: resultado.sentAttributes as Prisma.InputJsonValue }),
           lastPublishedAt: new Date(),
           needsSync: false, leaseUntil: null, leaseToken: null, lastError: null, attempts: 0,
         },

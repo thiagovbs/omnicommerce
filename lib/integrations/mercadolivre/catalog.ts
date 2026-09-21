@@ -1,5 +1,6 @@
 import "server-only";
 import { objectInput, OrderError, textInput } from "../../domain/order-input";
+import { lerAtributos } from "../../services/listing-attributes";
 import { ListingWithProduct, PublishResult } from "../../services/listings";
 import { API_ORIGIN, ProviderAuthError, ProviderTransientError } from "./client";
 
@@ -104,8 +105,12 @@ export async function montarAtributos(
   }
 
   const produto = listing.product;
+  // O que quem cadastra preencheu vence o automático: a tela mostra o valor
+  // derivado como sugestão justamente para poder ser sobreposto.
+  const preenchidos = lerAtributos(listing.attributes);
   const atributos: Atributo[] = [];
   const naoPreenchidos: string[] = [];
+  let temGtin = false;
 
   for (const cru of corpo) {
     const atributo = objectInput(cru);
@@ -113,12 +118,26 @@ export async function montarAtributos(
     const tags = atributo.tags ? objectInput(atributo.tags) : {};
     if (!tags.required && !tags.conditional_required) continue;
 
+    const preenchido = preenchidos[id];
+    if (preenchido) {
+      atributos.push(preenchido.valueId
+        ? { id, value_id: preenchido.valueId }
+        : { id, value_name: preenchido.valueName });
+      if (id === "GTIN") temGtin = true;
+      continue;
+    }
+
     if (id === "GTIN") {
-      // Vazio declarado: o provedor descarta com aviso, desde que o motivo venha.
+      // Sem código informado, declara-se o vazio. Em categoria onde GTIN é
+      // `required` de verdade -- livros, medido -- o provedor recusa mesmo
+      // assim, e a mensagem dele diz isso.
       atributos.push({ id: "GTIN", value_name: null });
       continue;
     }
     if (id === "EMPTY_GTIN_REASON") {
+      // Só faz sentido quando não há GTIN: mandar o motivo junto de um código
+      // válido é contradição.
+      if (temGtin) continue;
       const valores = Array.isArray(atributo.values) ? atributo.values.map(objectInput) : [];
       const semCodigo = valores.find((v) => /n[ãa]o tem c[óo]digo|sem c[óo]digo/i.test(String(v.name ?? "")))
         ?? valores[0];
@@ -137,13 +156,18 @@ export async function montarAtributos(
       atributos.push({ id, value_name: produto.sku });
       continue;
     }
-    naoPreenchidos.push(id);
+    // Só o que a categoria exige DE VERDADE trava a publicação. Condicional
+    // que não sabemos preencher fica de fora e o provedor decide.
+    if (tags.required) {
+      const nome = typeof atributo.name === "string" && atributo.name ? `${id} (${atributo.name})` : id;
+      naoPreenchidos.push(nome);
+    }
   }
 
   if (naoPreenchidos.length) {
     throw new OrderError(
-      "A categoria escolhida exige atributos que o catálogo não tem: "
-      + naoPreenchidos.join(", ") + ". Escolha outra categoria ou complete o cadastro.");
+      "A categoria escolhida exige atributos que ainda não foram preenchidos: "
+      + naoPreenchidos.join(", ") + ". Preencha-os na aba Categoria ou escolha outra categoria.");
   }
   return atributos;
 }
@@ -249,7 +273,9 @@ export async function publishMercadoLivreListing(
     redirect: "error", cache: "no-store", signal: AbortSignal.timeout(60000),
   }), "O Mercado Livre recusou o anúncio");
 
-  return lerResultado(corpo, null);
+  // Só na criação: a atualização manda preço e estoque, e devolver lista
+  // vazia aqui apagaria o registro do que foi enviado antes.
+  return { ...lerResultado(corpo, null), sentAttributes: atributos };
 }
 
 /// O provedor só conhece três condições; o catálogo aceita texto livre.
