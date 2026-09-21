@@ -19,6 +19,10 @@ export interface NotificationHandler {
   secret: string | undefined;
   /// Devolve null quando o aviso não interessa (tópico alheio, outra aplicação).
   parse: (body: unknown) => ParsedNotification | null;
+  /// Conferência extra sobre o corpo CRU, para provedor que assina o aviso.
+  /// Recebe o texto como chegou porque reserializar o JSON reordena chaves e
+  /// invalidaria a assinatura por um motivo invisível.
+  assinatura?: (corpoCru: string, request: Request) => boolean;
 }
 
 function authorized(supplied: string, expected: string | undefined) {
@@ -37,10 +41,22 @@ export async function handleProviderNotification(
   // 404 em vez de 401: não confirma a existência do endpoint para quem adivinha a URL.
   if (!authorized(suppliedSecret, handler.secret)) return new Response("Not found", { status: 404 });
 
+  let cru: string;
+  try {
+    cru = await readLimitedText(request, 8192);
+  } catch {
+    return Response.json({ error: "Aviso inválido." }, { status: 400 });
+  }
+  // Mesma resposta do segredo errado, pelo mesmo motivo: não confirma a
+  // existência do endpoint para quem está tentando adivinhar.
+  if (handler.assinatura && !handler.assinatura(cru, request)) {
+    return new Response("Not found", { status: 404 });
+  }
+
   let body: unknown;
   let parsed: ParsedNotification | null;
   try {
-    body = JSON.parse(await readLimitedText(request, 8192));
+    body = JSON.parse(cru);
     parsed = handler.parse(body);
   } catch (error) {
     return Response.json({ error: error instanceof OrderError ? error.message : "Aviso inválido." }, { status: 400 });

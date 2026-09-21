@@ -17,7 +17,12 @@ export default async function OrganizationsPage() {
   const organizations = await prisma.organization.findMany({
     where: platform ? {} : { id: actor.organizationId },
     orderBy: { name: "asc" },
-    select: { id: true, name: true, _count: { select: { users: true, sales: true, marketplaces: true } } },
+    select: {
+      id: true, name: true, legalName: true, taxId: true, email: true, phone: true,
+      zipCode: true, street: true, number: true, complement: true, district: true,
+      city: true, state: true,
+      _count: { select: { users: true, sales: true, marketplaces: true } },
+    },
   });
 
   return (
@@ -39,6 +44,7 @@ export default async function OrganizationsPage() {
           <thead className="bg-gray-50 border-b">
             <tr>
               <th className="px-6 py-4 text-sm font-semibold">Nome da Empresa</th>
+              <th className="px-6 py-4 text-sm font-semibold">CNPJ / Praça</th>
               <th className="px-6 py-4 text-sm font-semibold text-center">Usuários</th>
               <th className="px-6 py-4 text-sm font-semibold text-center">Marketplaces</th>
               <th className="px-6 py-4 text-sm font-semibold text-center">Vendas</th>
@@ -55,12 +61,22 @@ export default async function OrganizationsPage() {
                     <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">Sua empresa</span>
                   )}
                 </td>
+                <td className="px-6 py-4 text-sm text-gray-500">
+                  {/* CNPJ e praça: é o que identifica a empresa de verdade, e o
+                      que falta aqui é o que trava publicação de classificado. */}
+                  <div>{org.taxId ? formatarCnpj(org.taxId) : <span className="text-gray-400">sem CNPJ</span>}</div>
+                  <div className="text-xs">
+                    {org.city && org.state
+                      ? `${org.city}/${org.state}`
+                      : <span className="text-gray-400">sem endereço</span>}
+                  </div>
+                </td>
                 <td className="px-6 py-4 text-center text-sm text-gray-500">{org._count.users}</td>
                 <td className="px-6 py-4 text-center text-sm text-gray-500">{org._count.marketplaces}</td>
                 <td className="px-6 py-4 text-center text-sm text-gray-500">{org._count.sales}</td>
                 <td className="px-6 py-4 text-right">
                   <div className="flex justify-end gap-2">
-                    <OrganizationForm defaultValues={{ id: org.id, name: org.name }} />
+                    <OrganizationForm defaultValues={org} />
                     {/* Deleting the organization you are signed in with would lock you out. */}
                     {platform && org.id !== actor.organizationId && (
                       <DeleteOrganizationButton organizationId={org.id} organizationName={org.name} />
@@ -74,4 +90,11 @@ export default async function OrganizationsPage() {
       </div>
     </div>
   );
+}
+
+/// O banco guarda só dígitos; a máscara é da leitura.
+function formatarCnpj(digitos: string) {
+  if (digitos.length !== 14) return digitos;
+  return `${digitos.slice(0, 2)}.${digitos.slice(2, 5)}.${digitos.slice(5, 8)}`
+    + `/${digitos.slice(8, 12)}-${digitos.slice(12)}`;
 }

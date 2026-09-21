@@ -4,7 +4,10 @@ import { OrderError } from "../domain/order-input";
 import { ListingPublisher } from "../services/listings";
 import { decryptSecret } from "./crypto";
 import { publishMercadoLivreListing } from "./mercadolivre/catalog";
+import { organizationProfile } from "../services/organizations";
+import { publishOlxAd } from "./olx/catalog";
 import { publishSeboProduct } from "./sebo/catalog";
+import { publishShopeeListing } from "./shopee/catalog";
 
 /**
  * Despacho da publicação por provedor.
@@ -42,7 +45,20 @@ export function providerPublisher(db: PrismaClient, fetcher: typeof fetch = fetc
       case "MERCADO_LIVRE":
         return publishMercadoLivreListing(decryptSecret(connection.accessToken), listing, fetcher);
       case "SHOPEE":
-        throw new OrderError("Publicação na Shopee ainda não implementada.");
+        // A loja faz parte da credencial na Shopee: o `shop_id` entra na
+        // assinatura de toda chamada, e é o `externalAccountId` da conexão.
+        return publishShopeeListing(
+          { accessToken: decryptSecret(connection.accessToken), shopId: connection.externalAccountId },
+          listing, fetcher);
+      case "OLX": {
+        // Telefone e CEP do anúncio são da ORGANIZAÇÃO do produto, lidos agora:
+        // o mesmo deploy atende vários tenants, e um valor de ambiente faria o
+        // anúncio de um sair com o telefone do outro.
+        const empresa = await organizationProfile(db, listing.product.organizationId);
+        return publishOlxAd(
+          decryptSecret(connection.accessToken), listing,
+          { telefone: empresa.phone, cep: empresa.zipCode }, fetcher);
+      }
     }
   };
 }

@@ -45,6 +45,9 @@ enum AuditActorType {
 enum MarketplaceProvider {
   MERCADO_LIVRE
   SHOPEE
+  /// Classificados: publica anúncio e NÃO tem API de pedido. A jornada de
+  /// entrada (aviso -> venda -> baixa de estoque) não existe neste canal.
+  OLX
   SEBO_ONLINE
 }
 
@@ -98,6 +101,33 @@ enum Currency {
 model Organization {
   id           String        @id @default(cuid())
   name         String
+
+  /// Dados cadastrais da empresa, editáveis na tela de Organizações.
+  ///
+  /// Moram aqui, e não no ambiente, porque são DE UMA organização: o mesmo
+  /// deploy atende várias, e um valor em variável de ambiente serviria a todas
+  /// ao mesmo tempo -- o que está certo para credencial de aplicação e errado
+  /// para telefone de anunciante. Quem lê, lê pela organização do usuário
+  /// logado.
+  ///
+  /// Nenhum é obrigatório: uma organização nasce com o nome e ganha o resto
+  /// quando precisa. Quem exige o dado é quem o usa, e nomeia o que falta.
+  /// Razão social, quando difere do nome de exibição.
+  legalName    String        @default("")
+  /// CNPJ, só dígitos. Sem unicidade no banco de propósito: a coluna nasce
+  /// vazia em toda organização existente, e índice único recusaria a segunda
+  /// vazia. A duplicidade é conferida no serviço, onde dá para explicar.
+  taxId        String        @default("")
+  email        String        @default("")
+  phone        String        @default("")
+  zipCode      String        @default("")
+  street       String        @default("")
+  number       String        @default("")
+  complement   String        @default("")
+  district     String        @default("")
+  city         String        @default("")
+  state        String        @default("")
+
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   auditLogs    AuditLog[]

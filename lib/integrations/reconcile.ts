@@ -3,6 +3,7 @@ import { OrderError } from "../domain/order-input";
 import { ListarAlterados } from "../services/reconciliation";
 import { decryptSecret } from "./crypto";
 import { listChangedSeboOrders } from "./sebo/client";
+import { listChangedShopeeOrders } from "./shopee/client";
 
 // Pergunta ao provedor o que mudou. Só a listagem é específica de provedor:
 // o pedido em si é buscado depois pelo mesmo resolver dos avisos.
@@ -18,7 +19,14 @@ export function providerLister(fetcher: typeof fetch = fetch): ListarAlterados {
         // nomeada é melhor que código especulativo.
         throw new OrderError("Conciliação do Mercado Livre ainda não implementada.");
       case "SHOPEE":
-        throw new OrderError("Conciliação da Shopee ainda não implementada.");
+        return listChangedShopeeOrders(
+          { accessToken: decryptSecret(connection.accessToken), shopId: connection.externalAccountId },
+          desde, fetcher);
+      case "OLX":
+        // Não é omissão: a OLX é classificados e não tem pedido nenhum para
+        // conciliar. A venda acontece fora da plataforma, no telefone ou no
+        // chat. Conciliar aqui seria procurar o que não existe.
+        throw new OrderError("A OLX não tem pedidos: é canal só de publicação.");
     }
   };
 }

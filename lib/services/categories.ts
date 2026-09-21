@@ -56,6 +56,30 @@ export function canalTemArvore(code: string) {
 }
 
 /**
+ * Como este canal ganha categoria.
+ *
+ * São três mundos diferentes, e confundi-los deixa quem cadastra num beco sem
+ * saída:
+ *
+ * - `arvore`: o provedor publica a árvore e nós a importamos (Mercado Livre,
+ *   12 mil categorias). A escolha é navegada ou buscada.
+ * - `codigo`: o anúncio exige o código da categoria DO CANAL, e não temos a
+ *   árvore dele importada (Shopee, OLX). Só resta digitar o código -- e sem um
+ *   campo para isso a publicação recusaria para sempre, mandando o operador a
+ *   uma aba que não oferece nada.
+ * - `texto-livre`: o canal usa a categoria em texto do produto e não tem
+ *   categoria própria (Sebo On-Line). Não há nada a escolher por canal.
+ */
+export type ModoDeCategoria = "arvore" | "codigo" | "texto-livre";
+
+export function modoDeCategoria(code: string): ModoDeCategoria {
+  const provider = providerDoCanal(code);
+  if (provider && categoryFetcherFor(provider)) return "arvore";
+  if (provider === "SHOPEE" || provider === "OLX") return "codigo";
+  return "texto-livre";
+}
+
+/**
  * Importa a árvore de um canal.
  *
  * A troca é feita em transação: apaga o que havia e grava o novo. Sem isso,
@@ -155,6 +179,9 @@ export async function listCategoryTrees(db: PrismaClient, actor: UserActor) {
       // separar isso de "árvore ainda não importada", que se resolve
       // importando — esta não se resolve nunca.
       suportaArvore: canalTemArvore(canal.code),
+      // E precisa separar também de "exige código e não tem árvore", que se
+      // resolve digitando o código.
+      modo: modoDeCategoria(canal.code),
     };
   });
 }
@@ -222,20 +249,33 @@ export async function setListingCategory(
     if (!alvo) throw new OrderError("Produto não encontrado.");
     const marketplace = await tx.marketplace.findFirst({
       where: { id: canal, organizationId: actor.organizationId, active: true },
-      select: { id: true, name: true },
+      select: { id: true, name: true, code: true },
     });
     if (!marketplace) throw new OrderError("Canal não encontrado ou inativo.");
 
+    const modo = modoDeCategoria(marketplace.code);
     if (categoria) {
-      // Só folha permitida para publicação: uma intermediária seria recusada
-      // pelo provedor, longe de quem escolheu.
-      const existe = await tx.marketplaceCategory.findUnique({
-        where: { marketplaceId_externalId: { marketplaceId: canal, externalId: categoria } },
-        select: { leaf: true, listingAllowed: true, path: true },
-      });
-      if (!existe) throw new OrderError("Categoria não encontrada neste canal.");
-      if (!existe.leaf) throw new OrderError("Escolha uma subcategoria final, não um agrupamento.");
-      if (!existe.listingAllowed) throw new OrderError("Essa categoria não aceita novas publicações.");
+      if (modo === "arvore") {
+        // Só folha permitida para publicação: uma intermediária seria recusada
+        // pelo provedor, longe de quem escolheu.
+        const existe = await tx.marketplaceCategory.findUnique({
+          where: { marketplaceId_externalId: { marketplaceId: canal, externalId: categoria } },
+          select: { leaf: true, listingAllowed: true, path: true },
+        });
+        if (!existe) throw new OrderError("Categoria não encontrada neste canal.");
+        if (!existe.leaf) throw new OrderError("Escolha uma subcategoria final, não um agrupamento.");
+        if (!existe.listingAllowed) throw new OrderError("Essa categoria não aceita novas publicações.");
+      } else if (modo === "codigo") {
+        // Sem árvore importada não há o que conferir além da forma. O provedor
+        // é quem valida o código, e a mensagem dele chega na publicação.
+        if (!/^\d{1,20}$/.test(categoria)) {
+          throw new OrderError("O código de categoria deste canal é numérico.");
+        }
+      } else {
+        throw new OrderError(
+          "O canal " + marketplace.name + " usa a categoria em texto livre do produto"
+          + " e não tem categoria própria.");
+      }
     }
 
     const anterior = await tx.listing.findUnique({

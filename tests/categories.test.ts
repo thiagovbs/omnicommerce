@@ -4,8 +4,8 @@ import { PrismaClient } from "@prisma/client";
 import { OrderError } from "../lib/domain/order-input";
 import { fetchMercadoLivreCategories } from "../lib/integrations/mercadolivre/categories";
 import {
-  canalTemArvore, listCategoryChildren, listCategoryTrees, searchCategories, setListingCategory,
-  syncCategoriesIfStale, syncMarketplaceCategories, VALIDADE_MS,
+  canalTemArvore, listCategoryChildren, listCategoryTrees, modoDeCategoria, searchCategories,
+  setListingCategory, syncCategoriesIfStale, syncMarketplaceCategories, VALIDADE_MS,
 } from "../lib/services/categories";
 import { createProduct } from "../lib/services/products";
 import { requestPublication, syncListings } from "../lib/services/listings";
@@ -115,6 +115,18 @@ test("quem tem árvore de categorias", async (t) => {
     assert.equal(canalTemArvore("sebo_online"), false);
     assert.equal(canalTemArvore("shopee"), false);
     assert.equal(canalTemArvore("feira-livre"), false);
+  });
+
+  await t.test("três modos, e não dois: árvore, código digitado e texto livre", () => {
+    assert.equal(modoDeCategoria("mercado_livre"), "arvore");
+    // Shopee e OLX exigem a categoria DELES e não têm árvore importada aqui:
+    // sem o modo `codigo`, a tela mandava usar texto livre e a publicação
+    // recusava para sempre, sem saída.
+    assert.equal(modoDeCategoria("shopee"), "codigo");
+    assert.equal(modoDeCategoria("olx"), "codigo");
+    // O Sebo On-Line não tem categoria própria: é a do produto.
+    assert.equal(modoDeCategoria("sebo"), "texto-livre");
+    assert.equal(modoDeCategoria("feira-livre"), "texto-livre");
   });
 });
 
@@ -350,4 +362,56 @@ test("pedir publicação de um rascunho o coloca na fila", async (t) => {
         (await db4.listing.findFirstOrThrow({ where: { id: pedido.id } })).status, "PUBLISHED");
     });
   } finally { await db4.$disconnect(); }
+});
+
+test("categoria por código, para canal sem árvore importada", async (t) => {
+  const db9 = new PrismaClient();
+  try {
+    const org = await db9.organization.create({ data: { name: "Código de categoria" } });
+    const admin = await db9.user.create({ data: {
+      organizationId: org.id, email: `admin-cod-${Date.now()}@local.test`,
+      name: "Admin", passwordHash: "x", role: "ADMIN",
+    } });
+    const ator = { userId: admin.id, organizationId: org.id };
+    const shopee = await db9.marketplace.create({
+      data: { organizationId: org.id, code: "shopee", name: "Shopee do código" },
+    });
+    const sebo = await db9.marketplace.create({
+      data: { organizationId: org.id, code: "sebo", name: "Sebo do código" },
+    });
+    const produto = await createProduct(db9, ator, {
+      sku: "COD-001", title: "Produto para código", price: "10.00", stock: 1,
+    });
+
+    await t.test("código numérico é aceito sem árvore nenhuma", async () => {
+      // Quem valida o código é o provedor: aqui não há árvore contra a qual
+      // conferir, e recusar por isso deixaria o canal impublicável.
+      await setListingCategory(db9, ator, produto.id, shopee.id, "100182");
+      const listing = await db9.listing.findFirstOrThrow({
+        where: { productId: produto.id, marketplaceId: shopee.id },
+      });
+      assert.equal(listing.categoryExternalId, "100182");
+      assert.equal(listing.status, "DRAFT");
+    });
+
+    await t.test("código com letra é recusado pela forma", async () => {
+      await assert.rejects(
+        setListingCategory(db9, ator, produto.id, shopee.id, "MLB31447"),
+        (e: Error) => e instanceof OrderError && /numérico/.test(e.message));
+    });
+
+    await t.test("canal de texto livre recusa categoria própria, explicando", async () => {
+      await assert.rejects(
+        setListingCategory(db9, ator, produto.id, sebo.id, "123"),
+        (e: Error) => e instanceof OrderError && /texto livre/.test(e.message));
+    });
+
+    await t.test("limpar o código volta o anúncio a sem categoria", async () => {
+      await setListingCategory(db9, ator, produto.id, shopee.id, null);
+      const listing = await db9.listing.findFirstOrThrow({
+        where: { productId: produto.id, marketplaceId: shopee.id },
+      });
+      assert.equal(listing.categoryExternalId, null);
+    });
+  } finally { await db9.$disconnect(); }
 });

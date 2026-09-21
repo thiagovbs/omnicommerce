@@ -4,6 +4,8 @@ import { currentActor } from "@/lib/current-actor";
 import { providerDoCanal } from "@/lib/domain/marketplace-provider";
 import { isOrgAdmin } from "@/lib/domain/roles";
 import { oauthConfigured } from "@/lib/integrations/mercadolivre/oauth";
+import { olxOauthConfigured } from "@/lib/integrations/olx/oauth";
+import { shopeeConfig, shopeeConfigured } from "@/lib/integrations/shopee/client";
 import { prisma } from "@/lib/prisma";
 import { RetryButton } from "./retry-button";
 
@@ -11,7 +13,34 @@ export const dynamic = "force-dynamic";
 const statuses = { PENDING: "Pendente", PROCESSED: "Processado", IGNORED: "Evento antigo", FAILED: "Requer atenção" };
 const deliveryStatuses = { PENDING: "Envio pendente", PUBLISHED: "Enviado", FAILED: "Falha no envio" };
 const connectionStatuses = { ACTIVE: "Ativa", INACTIVE: "Inativa", EXPIRED: "Expirada" };
-const providerNames = { MERCADO_LIVRE: "Mercado Livre", SHOPEE: "Shopee", SEBO_ONLINE: "Sebo On-Line" };
+const providerNames = {
+  MERCADO_LIVRE: "Mercado Livre", SHOPEE: "Shopee", OLX: "OLX", SEBO_ONLINE: "Sebo On-Line",
+};
+
+/**
+ * Quem se conecta por OAuth, e por qual rota.
+ *
+ * Derivado do provedor, e não do código do canal: é o provedor que define o
+ * fluxo de autorização. O Sebo On-Line fica de fora porque a credencial dele é
+ * token de serviço, registrado por script -- não há tela a oferecer.
+ *
+ * `variaveis` existe para o aviso de indisponível dizer O QUE falta. Sem isso,
+ * o botão simplesmente não aparece e ninguém sabe por quê.
+ */
+const oauthPorProvedor = {
+  MERCADO_LIVRE: {
+    rota: "mercadolivre",
+    variaveis: "MERCADO_LIVRE_APP_ID e MERCADO_LIVRE_APP_SECRET",
+  },
+  SHOPEE: { rota: "shopee", variaveis: "SHOPEE_PARTNER_ID e SHOPEE_PARTNER_KEY" },
+  OLX: { rota: "olx", variaveis: "OLX_CLIENT_ID e OLX_CLIENT_SECRET" },
+} as const;
+
+type ProvedorComOauth = keyof typeof oauthPorProvedor;
+
+function temOauth(provider: string): provider is ProvedorComOauth {
+  return provider in oauthPorProvedor;
+}
 
 export default async function IntegrationsPage({
   searchParams,
@@ -21,7 +50,15 @@ export default async function IntegrationsPage({
   const actor = await currentActor();
   if (!isOrgAdmin(actor.role)) redirect("/dashboard");
   const aviso = await searchParams;
-  const mlDisponivel = oauthConfigured();
+  const disponivel: Record<ProvedorComOauth, boolean> = {
+    MERCADO_LIVRE: oauthConfigured(),
+    SHOPEE: shopeeConfigured(),
+    OLX: olxOauthConfigured(),
+  };
+  // Sandbox é informação de tela: sem ela, anúncio de teste e anúncio de
+  // verdade ficam com a mesma aparência aqui.
+  let shopeeSandbox = false;
+  try { shopeeSandbox = shopeeConfig().sandbox; } catch { shopeeSandbox = false; }
 
   const [marketplaces, events] = await Promise.all([
     prisma.marketplace.findMany({
@@ -62,8 +99,15 @@ export default async function IntegrationsPage({
     <p className="mt-1 mb-4 text-sm text-gray-500">
       Cada conexão é uma loja autorizada. É ela que diz de qual organização é o pedido que chega.
     </p>
-    {!mlDisponivel && <p className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-      A autorização do Mercado Livre está indisponível: falta configurar <span className="font-mono">MERCADO_LIVRE_APP_ID</span> e <span className="font-mono">MERCADO_LIVRE_APP_SECRET</span> no ambiente.
+    {Object.entries(oauthPorProvedor)
+      .filter(([provider]) => !disponivel[provider as ProvedorComOauth])
+      .map(([provider, { variaveis }]) => <p key={provider} className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+        A autorização do {providerNames[provider as ProvedorComOauth]} está indisponível: falta
+        configurar <span className="font-mono">{variaveis}</span> no ambiente.
+      </p>)}
+    {shopeeSandbox && <p className="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-800">
+      A Shopee está apontada para o <strong>sandbox</strong>. Anúncio publicado aqui não
+      aparece na loja real.
     </p>}
     <div className="overflow-x-auto rounded-xl border bg-white">
       <table className="w-full text-left text-sm">
@@ -87,8 +131,8 @@ export default async function IntegrationsPage({
                 {/* Reautorização é POR CONTA: com duas contas no mesmo canal,
                     um botão só não diz qual delas renovar -- e a que o
                     provedor devolve é a que estiver logada nele. */}
-                {connection.provider === "MERCADO_LIVRE" && mlDisponivel && <a
-                  href={`/api/integrations/mercadolivre/authorize?marketplaceId=${marketplace.id}&connectionId=${connection.id}`}
+                {temOauth(connection.provider) && disponivel[connection.provider] && <a
+                  href={`/api/integrations/${oauthPorProvedor[connection.provider].rota}/authorize?marketplaceId=${marketplace.id}&connectionId=${connection.id}`}
                   className="mt-1 inline-block text-xs text-blue-700 underline hover:text-blue-900"
                 >
                   Reautorizar esta conta
@@ -96,17 +140,20 @@ export default async function IntegrationsPage({
               </div>)}
           </td>
           <td className="p-4 align-top">
-            {providerDoCanal(marketplace.code) !== "MERCADO_LIVRE"
-              ? <span className="text-gray-400">—</span>
-              : mlDisponivel
-                ? <a
-                    href={`/api/integrations/mercadolivre/authorize?marketplaceId=${marketplace.id}`}
-                    className="inline-block rounded border px-3 py-1 hover:bg-gray-50"
-                  >
-                    {marketplace.connections.some((c) => c.provider === "MERCADO_LIVRE")
-                      ? "Conectar outra conta" : "Conectar Mercado Livre"}
-                  </a>
-                : <span className="text-gray-400">Indisponível</span>}
+            {(() => {
+              const provider = providerDoCanal(marketplace.code);
+              // Canal sem provedor de OAuth não tem o que oferecer aqui: ou não
+              // tem integração, ou a credencial dele não nasce de autorização.
+              if (!provider || !temOauth(provider)) return <span className="text-gray-400">—</span>;
+              if (!disponivel[provider]) return <span className="text-gray-400">Indisponível</span>;
+              const jaTem = marketplace.connections.some((c) => c.provider === provider);
+              return <a
+                href={`/api/integrations/${oauthPorProvedor[provider].rota}/authorize?marketplaceId=${marketplace.id}`}
+                className="inline-block rounded border px-3 py-1 hover:bg-gray-50"
+              >
+                {jaTem ? "Conectar outra conta" : `Conectar ${providerNames[provider]}`}
+              </a>;
+            })()}
           </td>
         </tr>)}</tbody>
       </table>

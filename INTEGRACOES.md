@@ -15,7 +15,7 @@ Aplicação publicada em `https://omnicommerce.vercel.app` (Vercel), banco no Ne
 
 ## O que existe
 
-Verificado por leitura do código e por **90 testes automatizados**. `npm run test:orders` sobe PostgreSQL 16 em contêiner efêmero, aplica as 9 migrations, aborta se houver divergência entre schema e migrations, e roda as suítes. Nenhum teste toca a rede: provedores e publicação são dublês.
+Verificado por leitura do código e por **361 testes automatizados**. `npm run test:orders` sobe PostgreSQL 16 em contêiner efêmero, aplica as 19 migrations, aborta se houver divergência entre schema e migrations, e roda as suítes. Nenhum teste toca a rede: provedores e publicação são dublês.
 
 Base e autorização:
 - Next.js 16.2.6, React 19.2.4, Prisma 6, NextAuth 5 beta.
@@ -29,6 +29,79 @@ Fila e integração:
 - Recepção comum em `lib/integrations/webhook.ts`: Mercado Livre e Sebo compartilham autenticação por segredo, validação, resolução de conexão e gravação.
 - OAuth do Mercado Livre: `state` cifrado em cookie de uso único (só o nonce viaja na URL), renovação de token com compare-and-swap pelo `updatedAt`, e recusa de renovação marcando a conexão `EXPIRED`.
 - O provedor de um canal é derivado do código do canal, num lugar só que tela e backend compartilham.
+
+## Isolamento por organização: validado, e o que saiu do ambiente
+
+A propriedade foi **verificada porta por porta**, não por leitura:
+`tests/tenant-isolation.test.ts` monta duas organizações completas e, para cada
+função de serviço que a tela chama com um identificador, o ator de uma tenta
+alcançar o registro da outra — editar produto, mexer em estoque, publicar,
+navegar e buscar árvore de categorias, escolher categoria, ler e gravar
+atributos, criar venda em canal alheio, mudar venda alheia. Todas as portas
+recusaram, e o trabalhador de publicação respeita a organização pedida na
+rodada.
+
+Uma varredura das 124 consultas a modelos de tenant mostra 73 sem filtro de
+organização no próprio `where` — e isso é o desenho, não um defeito: o padrão do
+código é "valide o id dentro da organização, depois opere por chave primária".
+O que garante a propriedade é o primeiro passo, e é ele que o teste exercita.
+O restante das consultas sem filtro é de plataforma (login por e-mail, papel do
+ator) ou de identidade de provedor (o aviso resolve a conexão por
+`externalAccountId`, que é como o tenant é DESCOBERTO, não vazado).
+
+**Dado de organização saiu do `.env`.** Telefone e CEP do anunciante da OLX
+viviam em variável de ambiente, e isso está errado num deploy que atende várias
+empresas: uma variável serve a todas ao mesmo tempo, e o anúncio de uma sairia
+com o telefone da outra. Agora moram no cadastro da organização (razão social,
+CNPJ, contato e endereço), editável na tela de Organizações pelo administrador
+da própria empresa — o operador da plataforma edita qualquer uma. Quem publica
+lê pela organização do produto.
+
+O CNPJ é conferido pelos dígitos verificadores, pela mesma razão que o cartão
+passa por Luhn: um dígito trocado só apareceria na nota do cliente. CNPJ
+repetido em outra organização é recusado nomeando ela, porque é quase sempre
+cadastro duplicado da mesma empresa — e a conferência é no serviço, não num
+índice único, porque a coluna nasce vazia em todas as organizações existentes e
+o índice recusaria a segunda vazia.
+
+Continuam em ambiente, corretamente, as credenciais de APLICAÇÃO (as do
+Mercado Livre, Shopee e OLX são uma por integração, não por cliente), as chaves
+de cifra e assinatura, e o endereço do banco.
+
+## Shopee e OLX: código pronto, nada medido
+
+Os dois adapters estão completos — autorização, publicação, pedido onde existe, e
+testes com dublês — e **nenhuma linha deles falou com o provedor de verdade**. O
+motivo é o mesmo nos dois casos, e é de cadastro, não de código: a Shopee exige
+conta de desenvolvedor aprovada e, no Brasil, CNPJ (o tipo "Individual Seller"
+está fechado para BR); a OLX entrega `client_id` por aprovação manual por e-mail
+e veda a API a plano de autônomo.
+
+O que cada um tem:
+
+- **Shopee** (Open Platform v2): assinatura HMAC-SHA256 com a base
+  `partner_id + caminho + timestamp` (+ `access_token` + `shop_id` nas rotas de
+  loja), erro reportado DENTRO de HTTP 200, sandbox como host separado,
+  `access_token` de 4h com `refresh_token` de 30 dias e autorização de até 365
+  dias — o oposto do Mercado Livre, que sem `offline_access` morre em 6 horas.
+  Publicação com upload de imagem, logística lida da loja, preço e estoque em
+  rotas próprias, e um resumo do que foi publicado em `publishedAttributes` para
+  não reenviar o álbum a cada venda. Pedido, conciliação por cursor e push com
+  assinatura conferível (desligada por padrão, porque a construção dela não foi
+  medida e um palpite errado derrubaria todo aviso com 404).
+- **OLX** (autoupload): é **classificados**, não marketplace. Publica anúncio e
+  **não tem API de pedido** — a venda acontece no telefone ou no chat, fora da
+  plataforma. Então participa só da jornada de saída, e conciliação e resolução
+  de pedido recusam com essa frase, em vez de "não implementado". O identificador
+  do anúncio é o nosso (a OLX casa a importação por ele, então reenviar é
+  edição), a imagem vai por URL e não por arquivo, o preço é inteiro em reais, e
+  produto desativado vira `operation: delete`. A importação é assíncrona: o `PUT`
+  devolve um token e o destino de cada anúncio sai numa segunda chamada.
+
+Categoria ganhou um terceiro modo por causa deles: além de árvore importada
+(Mercado Livre) e texto livre do produto (Sebo), existe **código digitado** —
+Shopee e OLX exigem a categoria deles e a árvore não é importada aqui. Sem esse
+modo, a tela mandava usar texto livre e a publicação recusava para sempre.
 
 ## Jornada validada em produção
 
@@ -121,5 +194,6 @@ O seed não roda no build: banco novo nasce sem organização e sem usuário, e 
 
 - Os dois provedores foram validados com pedido real em produção. No Mercado Livre foi **um** pedido, de um usuário de teste, com um item, sem frete e sem desconto: o mapeamento de frete, cupom e múltiplos itens continua coberto só por fixture.
 - O portal de desenvolvedores do Mercado Livre responde 403 a consulta automatizada. Os endpoints de autorização e token foram confirmados na prática — a autorização fecha e a conexão é gravada — mas continuam configuráveis por variável.
+- **Shopee e OLX não foram exercitados contra a API real** — nenhuma chamada, nem em sandbox. Tudo que existe vem da documentação pública, com os pontos incertos isolados em variável de ambiente (hosts, caminho de `basic_user_info`) para que um palpite errado se corrija sem deploy. Os testes com dublê provam a nossa metade do contrato: assinatura, envelope, classificação de erro, corpo enviado e mapeamento de pedido.
 - Não houve medição de latência do webhook, teste de carga nem exploração de segurança.
 - A renovação de token do ML nunca rodou de verdade, porque o provedor não emite refresh token para esta aplicação. O caminho está coberto por teste com dublê, incluindo a corrida do compare-and-swap.

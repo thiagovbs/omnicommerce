@@ -188,9 +188,11 @@ test("adapter do Mercado Livre sem rede e sem banco", async (t) => {
     await assert.rejects(resolve(context(connection({
       accessToken: "cifrado", refreshToken: null, expiresAt: new Date(Date.now() - 1000),
     }))), /renovação/);
+    // A OLX é o caso em que não há pedido para buscar: classificados não têm
+    // pedido nenhum, e a recusa acontece antes de qualquer chamada.
     await assert.rejects(resolve(context(connection({
-      provider: "SHOPEE", accessToken: "cifrado",
-    }))), /Shopee não implementada/);
+      provider: "OLX", accessToken: "cifrado",
+    }))), /só de publicação/);
   });
 
   await t.test("resolver: conexão ativa consulta o provedor e devolve snapshot válido", async () => {

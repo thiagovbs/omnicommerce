@@ -25,6 +25,9 @@ interface Canal {
   /// O provedor tem árvore a importar. Falso no Sebo On-Line, que usa a
   /// categoria em texto do produto.
   suportaArvore: boolean;
+  /// Como este canal ganha categoria: árvore navegável, código digitado ou a
+  /// categoria em texto livre do produto.
+  modo: "arvore" | "codigo" | "texto-livre";
 }
 
 /**
@@ -283,7 +286,16 @@ export function CategoryPicker({ produto }: { produto: ProductRow }) {
         </>
       )}
 
-      {canal && canalAtual && !canalAtual.suportaArvore && (
+      {canal && canalAtual?.modo === "codigo" && (
+        // A chave remonta o campo ao trocar de canal: o código é daquele canal,
+        // e reaproveitar o texto digitado misturaria um com o outro.
+        <CodigoDeCategoria
+          key={`${produto.id}:${canal}`}
+          produto={produto} canal={canal} nomeDoCanal={canalAtual.name} atual={escolhida}
+        />
+      )}
+
+      {canal && canalAtual?.modo === "texto-livre" && (
         <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-4 text-sm">
           <p className="text-gray-700">
             <span className="font-medium">{canalAtual.name}</span> não tem árvore de categorias:
@@ -302,11 +314,74 @@ export function CategoryPicker({ produto }: { produto: ProductRow }) {
         </div>
       )}
 
-      {canal && canalAtual?.suportaArvore && !canalAtual.temArvore && (
+      {canal && canalAtual?.modo === "arvore" && !canalAtual.temArvore && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           A árvore deste canal ainda não foi importada. Ela é baixada sozinha depois da
           autorização; use Importar para refazer agora.
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Categoria por código, para canal que exige a dele e cujo catálogo não
+ * importamos (Shopee, OLX).
+ *
+ * Existe porque a alternativa era um beco: a publicação recusa sem categoria
+ * do canal, a mensagem manda preencher aqui, e aqui não havia nada para
+ * preencher. O código não é conferido contra árvore nenhuma -- quem valida é o
+ * provedor, e a recusa dele chega na publicação, com as palavras dele.
+ */
+function CodigoDeCategoria({ produto, canal, nomeDoCanal, atual }: {
+  produto: ProductRow;
+  canal: string;
+  nomeDoCanal: string;
+  atual: string | null;
+}) {
+  const [codigo, setCodigo] = useState(atual ?? "");
+  const [salvando, setSalvando] = useState(false);
+  const [aviso, setAviso] = useState<{ erro: boolean; texto: string } | null>(null);
+
+  return (
+    <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-4 text-sm">
+      <p className="text-gray-700">
+        <span className="font-medium">{nomeDoCanal}</span> exige o código da categoria dele,
+        e a árvore deste canal não é importada por aqui. Informe o código numérico.
+      </p>
+      <div className="flex items-center gap-2">
+        <input
+          value={codigo}
+          onChange={(e) => setCodigo(e.target.value.replace(/\D/g, ""))}
+          inputMode="numeric"
+          maxLength={20}
+          placeholder="ex.: 100182"
+          className="w-40 rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm"
+        />
+        <button
+          type="button" disabled={salvando}
+          onClick={async () => {
+            setSalvando(true);
+            setAviso(null);
+            const resultado = await definirCategoria(produto.id, canal, codigo || null);
+            setSalvando(false);
+            setAviso(resultado.ok
+              ? { erro: false, texto: codigo ? `Categoria ${codigo} gravada.` : "Categoria removida." }
+              : { erro: true, texto: resultado.erro });
+          }}
+          className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+        >
+          {salvando ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+          Salvar
+        </button>
+      </div>
+      {atual && (
+        <p className="text-xs text-gray-500">
+          Gravado agora: <span className="font-mono">{atual}</span>
+        </p>
+      )}
+      {aviso && (
+        <p className={aviso.erro ? "text-sm text-red-700" : "text-sm text-green-700"}>{aviso.texto}</p>
       )}
     </div>
   );

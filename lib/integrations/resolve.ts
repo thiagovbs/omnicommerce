@@ -8,6 +8,9 @@ import { normalizeMercadoLivreOrder } from "./mercadolivre/normalize";
 import { refreshToken } from "./mercadolivre/oauth";
 import { fetchSeboOrder } from "./sebo/client";
 import { normalizeSeboOrder } from "./sebo/normalize";
+import { fetchShopeeOrder } from "./shopee/client";
+import { normalizeShopeeOrder } from "./shopee/normalize";
+import { refreshShopeeToken } from "./shopee/oauth";
 
 // Renova com folga: um token que expira no meio da requisição falharia depois
 // de já ter consumido uma tentativa de processamento do evento.
@@ -55,6 +58,55 @@ async function renovarMercadoLivre(
   return decryptSecret(atual.accessToken);
 }
 
+/**
+ * Renova a credencial da Shopee.
+ *
+ * Mesmo compare-and-swap do Mercado Livre, por dois motivos próprios daqui: o
+ * access token vale 4 horas, então renovar é rotina e não exceção; e a Shopee
+ * INVALIDA o refresh token a cada uso, devolvendo outro. Perder a gravação do
+ * novo transforma uma autorização de 365 dias numa de 30 -- e o sintoma
+ * apareceria semanas depois, sem ligação com a causa.
+ */
+async function renovarShopee(
+  db: PrismaClient, connection: MarketplaceConnection, fetcher: typeof fetch,
+) {
+  if (!connection.refreshToken) {
+    throw new OrderError("Conexão sem credencial de renovação. Reautorize a conexão.");
+  }
+  let tokens;
+  try {
+    tokens = await refreshShopeeToken(
+      decryptSecret(connection.refreshToken), connection.externalAccountId, fetcher);
+  } catch (error) {
+    if (error instanceof ProviderAuthError) {
+      await db.marketplaceConnection.updateMany({
+        where: { id: connection.id }, data: { status: "EXPIRED" },
+      });
+      throw new OrderError("Autorização da Shopee expirou. Reautorize a conexão.");
+    }
+    throw error;
+  }
+
+  const gravou = await db.marketplaceConnection.updateMany({
+    where: { id: connection.id, updatedAt: connection.updatedAt },
+    data: {
+      accessToken: encryptSecret(tokens.accessToken),
+      refreshToken: tokens.refreshToken ? encryptSecret(tokens.refreshToken) : connection.refreshToken,
+      expiresAt: tokens.expiresAt,
+      status: "ACTIVE",
+    },
+  });
+  if (gravou.count) return tokens.accessToken;
+
+  // Outra execução renovou primeiro: vale o token dela. Insistir no nosso
+  // invalidaria o que ela acabou de gravar.
+  const atual = await db.marketplaceConnection.findUniqueOrThrow({
+    where: { id: connection.id }, select: { accessToken: true },
+  });
+  if (!atual.accessToken) throw new OrderError("Conexão sem credencial armazenada.");
+  return decryptSecret(atual.accessToken);
+}
+
 // Consulta o pedido no provedor e devolve o snapshot; quem chama valida com
 // parseIntegratedOrder, fora de qualquer transação.
 export function providerResolver(db: PrismaClient, fetcher: typeof fetch = fetch): OrderSnapshotResolver {
@@ -80,8 +132,19 @@ export function providerResolver(db: PrismaClient, fetcher: typeof fetch = fetch
           await fetchSeboOrder(decryptSecret(connection.accessToken), event.externalOrderId, fetcher),
         );
       }
-      case "SHOPEE":
-        throw new OrderError("Integração de pedidos da Shopee não implementada.");
+      case "SHOPEE": {
+        const token = expirando
+          ? await renovarShopee(db, connection, fetcher)
+          : decryptSecret(connection.accessToken);
+        return normalizeShopeeOrder(await fetchShopeeOrder(
+          { accessToken: token, shopId: connection.externalAccountId },
+          event.externalOrderId, fetcher));
+      }
+      case "OLX":
+        // A OLX não tem pedido: ela publica classificado, e o contato do
+        // comprador acontece fora. Um evento de pedido neste canal é sinal de
+        // configuração errada, não de integração faltando.
+        throw new OrderError("A OLX não tem pedidos: é canal só de publicação.");
     }
   };
 }
