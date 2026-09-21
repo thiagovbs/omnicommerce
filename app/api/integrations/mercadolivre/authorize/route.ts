@@ -22,7 +22,8 @@ export async function GET(request: Request) {
   }
   if (!isOrgAdmin(actor.role)) redirect("/dashboard");
 
-  const marketplaceId = new URL(request.url).searchParams.get("marketplaceId") ?? "";
+  const params = new URL(request.url).searchParams;
+  const marketplaceId = params.get("marketplaceId") ?? "";
   const marketplace = marketplaceId
     ? await prisma.marketplace.findFirst({
         where: { id: marketplaceId, organizationId: actor.organizationId, active: true },
@@ -35,7 +36,24 @@ export async function GET(request: Request) {
     redirect("/integrations?erro=marketplace");
   }
 
-  const { nonce, cookie } = criarEstado(actor.organizationId, marketplace.id);
+  // Reautorização de uma conexão existente carrega a conta que se espera de
+  // volta. Quem decide qual conta o provedor devolve é a sessão aberta LÁ, não
+  // este link: sem a conta esperada, reautorizar uma de duas contas do mesmo
+  // canal renovava a credencial da outra, sem aviso.
+  const connectionId = params.get("connectionId") ?? "";
+  const conexao = connectionId
+    ? await prisma.marketplaceConnection.findFirst({
+        where: {
+          id: connectionId, marketplaceId: marketplace.id, provider: "MERCADO_LIVRE",
+          marketplace: { organizationId: actor.organizationId },
+        },
+        select: { externalAccountId: true },
+      })
+    : null;
+  if (connectionId && !conexao) redirect("/integrations?erro=conexao");
+
+  const { nonce, cookie } = criarEstado(
+    actor.organizationId, marketplace.id, conexao?.externalAccountId);
   (await cookies()).set(STATE_COOKIE, cookie, {
     httpOnly: true,
     secure: true,

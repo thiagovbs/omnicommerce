@@ -5,7 +5,7 @@ import { currentActor } from "@/lib/current-actor";
 import { OrderError } from "@/lib/domain/order-input";
 import { isOrgAdmin } from "@/lib/domain/roles";
 import { exchangeCode, oauthConfig } from "@/lib/integrations/mercadolivre/oauth";
-import { lerEstado, STATE_COOKIE } from "@/lib/integrations/oauth-state";
+import { assertContaEsperada, lerEstado, STATE_COOKIE } from "@/lib/integrations/oauth-state";
 import { prisma } from "@/lib/prisma";
 import { syncCategoriesIfStale } from "@/lib/services/categories";
 import { saveProviderConnection } from "@/lib/services/connections";
@@ -45,6 +45,9 @@ export async function GET(request: Request) {
     // A sessão que conclui precisa ser da mesma organização que iniciou.
     if (estado.organizationId !== actor.organizationId) throw new OrderError("Organização divergente.");
     const tokens = await exchangeCode(code);
+    // Reautorização é de uma conta específica: gravar a que o provedor
+    // devolveu renovaria a credencial da conta errada.
+    assertContaEsperada(estado, tokens.externalAccountId);
     await saveProviderConnection(prisma, actor, {
       provider: "MERCADO_LIVRE",
       marketplaceId: estado.marketplaceId,

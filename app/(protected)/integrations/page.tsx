@@ -54,6 +54,7 @@ export default async function IntegrationsPage({
       Não foi possível concluir a autorização: {aviso.erro === "estado" ? "a sessão de autorização expirou ou não corresponde. Tente novamente."
         : aviso.erro === "autorizacao" ? "a autorização foi recusada no provedor."
         : aviso.erro === "marketplace" ? "marketplace inválido ou inativo."
+        : aviso.erro === "conexao" ? "a conexão que se pediu para reautorizar não existe mais neste canal."
         : aviso.erro === "falha" ? "falha inesperada ao falar com o provedor." : aviso.erro}
     </p>}
 
@@ -83,6 +84,15 @@ export default async function IntegrationsPage({
                   {connection.expiresAt && ` · credencial até ${format(connection.expiresAt, "dd/MM/yyyy HH:mm")}`}
                   {connection.lastSyncedAt && ` · sincronizada ${format(connection.lastSyncedAt, "dd/MM/yyyy HH:mm")}`}
                 </div>
+                {/* Reautorização é POR CONTA: com duas contas no mesmo canal,
+                    um botão só não diz qual delas renovar -- e a que o
+                    provedor devolve é a que estiver logada nele. */}
+                {connection.provider === "MERCADO_LIVRE" && mlDisponivel && <a
+                  href={`/api/integrations/mercadolivre/authorize?marketplaceId=${marketplace.id}&connectionId=${connection.id}`}
+                  className="mt-1 inline-block text-xs text-blue-700 underline hover:text-blue-900"
+                >
+                  Reautorizar esta conta
+                </a>}
               </div>)}
           </td>
           <td className="p-4 align-top">
@@ -94,7 +104,7 @@ export default async function IntegrationsPage({
                     className="inline-block rounded border px-3 py-1 hover:bg-gray-50"
                   >
                     {marketplace.connections.some((c) => c.provider === "MERCADO_LIVRE")
-                      ? "Reautorizar Mercado Livre" : "Conectar Mercado Livre"}
+                      ? "Conectar outra conta" : "Conectar Mercado Livre"}
                   </a>
                 : <span className="text-gray-400">Indisponível</span>}
           </td>

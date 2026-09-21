@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomBytes } from "node:crypto";
-import { parseIntegratedOrder } from "../lib/domain/order-input";
+import { OrderError, parseIntegratedOrder } from "../lib/domain/order-input";
 import { encryptSecret } from "../lib/integrations/crypto";
 import { ProviderAuthError, ProviderTransientError } from "../lib/integrations/mercadolivre/client";
 import {
   authorizationUrl, exchangeCode, OAuthConfigurationError, oauthConfig, refreshToken,
 } from "../lib/integrations/mercadolivre/oauth";
-import { criarEstado, lerEstado } from "../lib/integrations/oauth-state";
+import { assertContaEsperada, criarEstado, lerEstado } from "../lib/integrations/oauth-state";
 import { providerResolver } from "../lib/integrations/resolve";
 
 const APP = "https://omnicommerce.vercel.app";
@@ -194,6 +194,33 @@ test("OAuth do Mercado Livre sem rede", async (t) => {
       const raw = Buffer.from(cookie, "base64");
       raw[raw.length - 1] ^= 0xff;
       assert.throws(() => lerEstado(raw.toString("base64"), nonce), /inválido/);
+    });
+  });
+
+  await t.test("reautorização carrega a conta pedida e recusa outra", () => {
+    comAmbiente(configurado, () => {
+      // Conectar conta nova não tem conta esperada: qualquer uma serve.
+      const nova = criarEstado("org-1", "mkt-1");
+      const semConta = lerEstado(nova.cookie, nova.nonce);
+      assert.equal(semConta.contaEsperada, undefined);
+      assertContaEsperada(semConta, "49717072");
+
+      // Reautorizar tem. Quem escolhe a conta é a sessão aberta no provedor,
+      // então voltar de outra conta renovaria a credencial errada -- e a tela
+      // diria "conectado" com a conta pedida ainda vencida.
+      const { nonce, cookie } = criarEstado("org-1", "mkt-1", "3699838900");
+      const estado = lerEstado(cookie, nonce);
+      assert.equal(estado.contaEsperada, "3699838900");
+      assertContaEsperada(estado, "3699838900");
+      assert.throws(
+        () => assertContaEsperada(estado, "49717072"),
+        (e: Error) => e instanceof OrderError
+          // A mensagem nomeia as DUAS contas: sem isso não se sabe em qual
+          // se logou nem qual se queria.
+          && /49717072/.test(e.message) && /3699838900/.test(e.message)
+          && /janela anônima/.test(e.message));
+      // A conta esperada também não escapa na URL.
+      assert.equal(nonce.includes("3699838900"), false);
     });
   });
 
