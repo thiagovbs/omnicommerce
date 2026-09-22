@@ -153,9 +153,18 @@ test("pedidos, status e eventos em PostgreSQL", async (t) => {
     });
 
     await t.test("outbox recupera falhas, protege publicação concorrente e retoma lease expirado", async () => {
-      await db.outboxMessage.updateMany({ data: { status: "PUBLISHED" } });
+      // Limitado a ESTA organização, do começo ao fim. O banco de teste é
+      // compartilhado com as outras suítes, que enfileiram avisos enquanto
+      // isto roda: sem o filtro, "exatamente um pendente" era uma corrida --
+      // e o `updateMany` sem `where`, que zerava a fila de todo mundo, era a
+      // outra metade do problema.
+      await db.outboxMessage.updateMany({
+        where: { event: { marketplace: { organizationId: org.id } } },
+        data: { status: "PUBLISHED" },
+      });
       const event = await recordChannelEvent(channel.id, "outbox", snapshot("outbox"));
-      const failure = await dispatchOutbox(db, async () => { throw new Error("network secret must not be saved"); });
+      const failure = await dispatchOutbox(
+        db, async () => { throw new Error("network secret must not be saved"); }, 20, org.id);
       assert.equal(failure.failed, 1);
       const pending = await db.outboxMessage.findUniqueOrThrow({ where: { eventId: event.id } });
       assert.equal(pending.status, "PENDING");
@@ -169,7 +178,7 @@ test("pedidos, status e eventos em PostgreSQL", async (t) => {
         // regra para a publicação real não quebrar sem ninguém notar.
         assert.match(message.deduplicationId, /^[A-Za-z0-9_.-]{1,128}$/);
         deliveries++;
-      })));
+      }, 20, org.id)));
       assert.equal(deliveries, 1);
       assert.equal((await db.outboxMessage.findUniqueOrThrow({ where: { eventId: event.id } })).status, "PUBLISHED");
     });

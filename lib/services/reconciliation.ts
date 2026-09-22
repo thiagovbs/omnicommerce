@@ -1,7 +1,10 @@
 import "server-only";
 import { MarketplaceConnection, PrismaClient } from "@prisma/client";
-import { OrderError } from "../domain/order-input";
+import { OrderError, textInput } from "../domain/order-input";
+import { assertOrgAdmin } from "./access";
+import { UserActor } from "./actor";
 import { recordOrderEvent } from "./integration-events";
+import { dispatchOutbox, EventPublisher } from "./outbox";
 
 /**
  * Conciliação periódica.
@@ -117,4 +120,101 @@ export async function reconcileAll(db: PrismaClient, listar: ListarAlterados, li
     }
   }
   return { conexoes: connections.length, verificados, enfileirados, falhas };
+}
+
+/// Quantas rodadas de publicação uma sincronização manual faz. Vinte por
+/// rodada: cem avisos cobrem qualquer represamento que alguém vá olhar na
+/// tela, e a rota tem 60 segundos para responder.
+const RODADAS_DA_SINCRONIZACAO = 5;
+
+export interface ResultadoDaSincronizacao {
+  conexoes: number;
+  verificados: number;
+  enfileirados: number;
+  publicados: number;
+  falhas: string[];
+}
+
+/**
+ * Conciliação sob demanda: o botão "Sincronizar agora".
+ *
+ * Existe porque a conciliação automática roda de hora em hora, e o que ela
+ * enfileira ainda espera a rodada seguinte do despachante. Quando alguém
+ * percebe que uma venda não entrou, esperar duas engrenagens lentas é a pior
+ * resposta possível -- ainda mais numa demonstração.
+ *
+ * Faz as duas metades no mesmo clique: pergunta ao provedor o que mudou (é a
+ * via que NÃO depende de aviso nenhum ter chegado) e esvazia a fila daquela
+ * organização em seguida.
+ *
+ * Duas coisas que ele não faz, de propósito:
+ *
+ * - **Não busca o pedido nem grava venda aqui.** Isso continua sendo do
+ *   trabalhador, que roda fora da requisição. O botão devolve quantos avisos
+ *   saíram; as vendas aparecem alguns segundos depois. Processar na
+ *   requisição daria um número bonito na tela e um tempo de resposta refém da
+ *   API do provedor.
+ * - **Não alcança outra organização.** Nem a conciliação nem a publicação: o
+ *   filtro é o da organização de quem apertou.
+ */
+export async function sincronizarAgora(
+  db: PrismaClient, actor: UserActor, listar: ListarAlterados, publish: EventPublisher,
+  opcoes: { connectionId?: string } = {},
+): Promise<ResultadoDaSincronizacao> {
+  await assertOrgAdmin(db, actor);
+  const connectionId = opcoes.connectionId
+    ? textInput(opcoes.connectionId, "Conexão") : undefined;
+
+  const connections = await db.marketplaceConnection.findMany({
+    where: {
+      status: "ACTIVE",
+      // A organização entra na consulta, e não numa conferência depois: id de
+      // conexão alheia simplesmente não encontra nada.
+      marketplace: { active: true, organizationId: actor.organizationId },
+      ...(connectionId ? { id: connectionId } : {}),
+    },
+    orderBy: { lastReconciledAt: { sort: "asc", nulls: "first" } },
+    take: 20,
+  });
+  if (!connections.length) {
+    throw new OrderError(connectionId
+      ? "Conexão não encontrada ou inativa."
+      : "Nenhuma conta conectada para sincronizar.");
+  }
+
+  let verificados = 0;
+  let enfileirados = 0;
+  const falhas: string[] = [];
+  for (const connection of connections) {
+    try {
+      const resultado = await reconcileConnection(db, connection, listar);
+      verificados += resultado.verificados;
+      enfileirados += resultado.enfileirados;
+    } catch (error) {
+      // Uma conexão com problema não impede as outras -- nem impede a fila de
+      // esvaziar, que é metade do que o botão promete.
+      falhas.push(`${connection.provider}/${connection.externalAccountId}: ${
+        error instanceof OrderError ? error.message : "falha ao conciliar"
+      }`);
+    }
+  }
+
+  // Esvazia até acabar ou até o teto. O que sobrar fica para o agendador: a
+  // fila não se perde, só demora mais.
+  let publicados = 0;
+  for (let rodada = 0; rodada < RODADAS_DA_SINCRONIZACAO; rodada += 1) {
+    const { published } = await dispatchOutbox(db, publish, 20, actor.organizationId);
+    publicados += published;
+    if (!published) break;
+  }
+
+  await db.auditLog.create({ data: {
+    action: "SYNC", entity: "MARKETPLACE_CONNECTION", entityId: connectionId ?? "todas",
+    organizationId: actor.organizationId, userId: actor.userId,
+    details: `Sincronização manual: ${connections.length} conta(s), ${verificados} pedido(s)`
+      + ` verificado(s), ${enfileirados} aviso(s) enfileirado(s), ${publicados} publicado(s).`
+      + (falhas.length ? ` Falhas: ${falhas.join("; ")}` : ""),
+  } });
+
+  return { conexoes: connections.length, verificados, enfileirados, publicados, falhas };
 }

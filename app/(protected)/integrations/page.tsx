@@ -6,6 +6,7 @@ import { isOrgAdmin } from "@/lib/domain/roles";
 import { faltaParaConfigurar } from "@/lib/domain/marketplace-config";
 import { prisma } from "@/lib/prisma";
 import { RetryButton } from "./retry-button";
+import { SyncButton } from "./sync-button";
 
 export const dynamic = "force-dynamic";
 const statuses = { PENDING: "Pendente", PROCESSED: "Processado", IGNORED: "Evento antigo", FAILED: "Requer atenção" };
@@ -107,9 +108,21 @@ export default async function IntegrationsPage({
         : aviso.erro === "falha" ? "falha inesperada ao falar com o provedor." : aviso.erro}
     </p>}
 
-    <h2 className="mt-8 text-xl font-semibold">Conexões</h2>
-    <p className="mt-1 mb-4 text-sm text-gray-500">
-      Cada conexão é uma loja autorizada. É ela que diz de qual organização é o pedido que chega.
+    <div className="mt-8 flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h2 className="text-xl font-semibold">Conexões</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          Cada conexão é uma loja autorizada. É ela que diz de qual organização é o pedido que chega.
+        </p>
+      </div>
+      {/* Pergunta ao provedor o que mudou e esvazia a fila, sem esperar a
+          conciliação da hora cheia nem a rodada do despachante. É a via que
+          não depende de aviso nenhum ter chegado. */}
+      <SyncButton destaque label="Sincronizar tudo agora" />
+    </div>
+    <p className="mt-2 mb-4 text-xs text-gray-500">
+      A sincronização pergunta a cada provedor o que mudou e traz o que faltar —
+      útil quando uma venda não apareceu sozinha.
     </p>
     {/* O aviso é POR CANAL, porque a configuração é do canal: numa plataforma
         com várias organizações, o Mercado Livre de uma pode estar configurado
@@ -156,6 +169,13 @@ export default async function IntegrationsPage({
                   >
                     Reautorizar esta conta
                   </a>}
+                  {/* Sincronizar também é POR CONTA, pela mesma razão da
+                      reautorização: com duas contas no canal, saber qual delas
+                      foi sincronizada é metade da resposta. Só conta ativa --
+                      numa expirada o botão só produziria erro. */}
+                  {connection.status === "ACTIVE" && <div className="mt-1">
+                    <SyncButton connectionId={connection.id} label="Sincronizar esta conta" />
+                  </div>}
                 </div>)}
             </td>
             <td className="p-3 align-top sm:p-4">

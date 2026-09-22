@@ -4,8 +4,11 @@ import { PrismaClient } from "@prisma/client";
 import { OrderError } from "../lib/domain/order-input";
 import {
   janelaDe, JANELA_PADRAO_MS, ListarAlterados, reconcileAll, reconcileConnection,
+  sincronizarAgora,
 } from "../lib/services/reconciliation";
-import { processOrderEvent, OrderSnapshotResolver } from "../lib/services/integration-events";
+import {
+  processOrderEvent, OrderSnapshotResolver, recordOrderEvent,
+} from "../lib/services/integration-events";
 
 const db = new PrismaClient();
 
@@ -153,16 +156,104 @@ test("conciliação periódica em PostgreSQL", async (t) => {
       assert.equal(await db.integrationEvent.count({ where: { externalOrderId: "apos-falha" } }), 1);
     });
 
+    await t.test("sincronizar agora concilia e esvazia a fila, só da organização", async () => {
+      // O botão da tela. Faz as duas metades no mesmo clique: pergunta ao
+      // provedor o que mudou e publica o que enfileirou -- porque esperar a
+      // conciliação da hora cheia e depois a rodada do despachante é a pior
+      // resposta para quem acabou de ver que a venda não entrou.
+      const admin = await db.user.create({ data: {
+        organizationId: org.id, email: `sync-${Date.now()}@local.test`,
+        name: "Admin", passwordHash: "x", role: "ADMIN",
+      } });
+      const ator = { userId: admin.id, organizationId: org.id };
+
+      // Outra organização, com aviso pendente na fila: nada dela pode sair
+      // com a sessão de quem apertou o botão.
+      const outraOrg = await db.organization.create({ data: { name: `Alheia ${Date.now()}` } });
+      const outroCanal = await db.marketplace.create({
+        data: { organizationId: outraOrg.id, code: "sebo", name: "Sebo alheio" },
+      });
+      const alheio = await recordOrderEvent(db, {
+        marketplaceId: outroCanal.id, externalEventId: `alheio-${Date.now()}`,
+        externalOrderId: "nao-e-meu", payload: {},
+      });
+
+      const publicados: string[] = [];
+      const publish = async ({ eventId }: { eventId: string }) => { publicados.push(eventId); };
+      const listar: ListarAlterados = async (connection) => (connection.id === conexao.id
+        ? [{ externalOrderId: "pelo-botao", updatedAt: new Date("2026-09-19T22:00:00Z") }]
+        : []);
+
+      const resultado = await sincronizarAgora(db, ator, listar, publish, {
+        connectionId: conexao.id,
+      });
+      assert.equal(resultado.conexoes, 1);
+      assert.equal(resultado.enfileirados, 1);
+      // Publicou o que acabou de enfileirar, sem esperar rodada nenhuma.
+      assert.ok(resultado.publicados >= 1);
+
+      const evento = await db.integrationEvent.findFirstOrThrow({
+        where: { externalOrderId: "pelo-botao" }, include: { outbox: true },
+      });
+      assert.equal(evento.outbox?.status, "PUBLISHED");
+      assert.ok(publicados.includes(evento.id));
+      // A fila da outra organização não foi tocada.
+      assert.equal(publicados.includes(alheio.id), false);
+      assert.equal(
+        (await db.outboxMessage.findUniqueOrThrow({ where: { eventId: alheio.id } })).status,
+        "PENDING");
+
+      // Fica registrado quem mandou sincronizar.
+      const registro = await db.auditLog.findFirst({
+        where: { organizationId: org.id, action: "SYNC" }, orderBy: { createdAt: "desc" },
+      });
+      assert.ok(registro?.details?.includes("Sincronização manual"));
+    });
+
+    await t.test("sincronizar não alcança conexão de outra organização", async () => {
+      const admin = await db.user.create({ data: {
+        organizationId: org.id, email: `sync2-${Date.now()}@local.test`,
+        name: "Admin", passwordHash: "x", role: "ADMIN",
+      } });
+      const outraOrg = await db.organization.create({ data: { name: `Alheia2 ${Date.now()}` } });
+      const outroCanal = await db.marketplace.create({
+        data: { organizationId: outraOrg.id, code: "sebo", name: "Sebo alheio 2" },
+      });
+      const conexaoAlheia = await db.marketplaceConnection.create({
+        data: { marketplaceId: outroCanal.id, provider: "SEBO_ONLINE", externalAccountId: `alheia-${Date.now()}` },
+      });
+      // Id de conexão alheia não encontra nada: a organização entra na
+      // consulta, e não numa conferência depois.
+      await assert.rejects(
+        sincronizarAgora(db, { userId: admin.id, organizationId: org.id },
+          async () => [], async () => {}, { connectionId: conexaoAlheia.id }),
+        (e: Error) => e instanceof OrderError && /não encontrada/.test(e.message));
+    });
+
+    await t.test("quem não é administrador não sincroniza", async () => {
+      const operador = await db.user.create({ data: {
+        organizationId: org.id, email: `op-${Date.now()}@local.test`,
+        name: "Operador", passwordHash: "x", role: "OPERATOR",
+      } });
+      await assert.rejects(
+        sincronizarAgora(db, { userId: operador.id, organizationId: org.id },
+          async () => [], async () => {}),
+        (e: Error) => e instanceof OrderError && /administradores/.test(e.message));
+    });
+
     await t.test("conexão inativa fica de fora da rodada", async () => {
       await db.marketplaceConnection.update({
         where: { id: conexao.id }, data: { status: "INACTIVE" },
       });
       try {
-        const resultado = await reconcileAll(db, async () => []);
-        const ativas = await db.marketplaceConnection.count({
-          where: { status: "ACTIVE", marketplace: { active: true } },
-        });
-        assert.equal(resultado.conexoes, ativas);
+        // Pelas conexões que a rodada PERGUNTOU, e não por uma contagem global:
+        // o banco de teste é compartilhado com as outras suítes, que criam e
+        // apagam conexão enquanto esta roda. Contar duas vezes em momentos
+        // diferentes comparava números de mundos diferentes.
+        const perguntadas: string[] = [];
+        await reconcileAll(db, async (connection) => { perguntadas.push(connection.id); return []; });
+        assert.equal(perguntadas.includes(conexao.id), false,
+          "conexão inativa não pode entrar na rodada");
       } finally {
         await db.marketplaceConnection.update({
           where: { id: conexao.id }, data: { status: "ACTIVE" },

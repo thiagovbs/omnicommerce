@@ -9,12 +9,23 @@ import { serializable } from "./transactions";
 
 export type EventPublisher = (message: { eventId: string; deduplicationId: string }) => Promise<void>;
 
+/**
+ * Publica o que está na fila.
+ *
+ * `organizationId` limita a rodada a uma organização. O agendador não passa
+ * nada -- ele atende todo mundo --, mas a sincronização manual passa: quem
+ * aperta o botão é administrador de UMA organização, e esvaziar a fila das
+ * outras com a sessão dele seria trabalho alheio feito com a conta errada.
+ */
 // Publisher timeout must be shorter than the lease. Unsuccessful delivery must throw.
-export async function dispatchOutbox(db: PrismaClient, publish: EventPublisher, limit = 20) {
+export async function dispatchOutbox(
+  db: PrismaClient, publish: EventPublisher, limit = 20, organizationId?: string,
+) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new OrderError("Limite de publicação inválido.");
   const now = new Date();
   const candidates = await db.outboxMessage.findMany({ where: {
     status: "PENDING", availableAt: { lte: now }, OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }],
+    ...(organizationId ? { event: { marketplace: { organizationId } } } : {}),
   }, orderBy: { createdAt: "asc" }, take: limit });
   let published = 0;
   let failed = 0;
