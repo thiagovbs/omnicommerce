@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { OrderError } from "../domain/order-input";
 import { ListingPublisher } from "../services/listings";
 import { decryptSecret } from "./crypto";
+import { publishFacebookItem } from "./facebook/catalog";
 import { publishMercadoLivreListing } from "./mercadolivre/catalog";
 import { marketplaceSettings } from "../services/marketplaces";
 import { organizationProfile } from "../services/organizations";
@@ -56,6 +57,11 @@ export function providerPublisher(db: PrismaClient, fetcher: typeof fetch = fetc
         return publishShopeeListing(
           cfg, { accessToken: decryptSecret(connection.accessToken), shopId: connection.externalAccountId },
           listing, fetcher);
+      case "FACEBOOK":
+        // Catálogo do Meta: o item vai pelo id do catálogo, que é do canal.
+        // Nada aqui é da conta além do token -- é a conexão que diz quem
+        // tem permissão de escrever nele.
+        return publishFacebookItem(cfg, decryptSecret(connection.accessToken), listing, fetcher);
       case "OLX": {
         // Telefone e CEP do anúncio são da ORGANIZAÇÃO do produto, lidos agora:
         // o mesmo deploy atende vários tenants, e um valor de ambiente faria o

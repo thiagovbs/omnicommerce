@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomBytes } from "node:crypto";
-import { PrismaClient } from "@prisma/client";
+import { MarketplaceProvider, PrismaClient } from "@prisma/client";
 import {
   camposDoProvedor, codigoDoProvedor, faltaParaConfigurar, parseMarketplaceSettings,
   PROVEDORES,
@@ -58,6 +58,15 @@ test("catálogo de configuração, sem banco", async (t) => {
     assert.equal(codigoDoProvedor("SHOPEE"), "shopee");
     assert.equal(codigoDoProvedor("OLX"), "olx");
     assert.equal(codigoDoProvedor("SEBO_ONLINE"), "sebo");
+    assert.equal(codigoDoProvedor("FACEBOOK"), "facebook");
+  });
+
+  await t.test("o provedor aceito no cadastro é o que a tela oferece", () => {
+    // A lista de provedores válidos já foi escrita à mão no serviço, e o
+    // sintoma de ela ficar para trás é a tela oferecer um canal que o servidor
+    // recusa. Aqui as duas pontas são conferidas contra o enum do banco.
+    const doEnum = Object.values(MarketplaceProvider).sort();
+    assert.deepEqual(PROVEDORES.map((p) => p.provider).sort(), doEnum);
   });
 
   await t.test("normaliza URL e recusa o que não serve", () => {

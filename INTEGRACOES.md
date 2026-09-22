@@ -98,6 +98,55 @@ O que cada um tem:
   produto desativado vira `operation: delete`. A importação é assíncrona: o `PUT`
   devolve um token e o destino de cada anúncio sai numa segunda chamada.
 
+## Facebook: catálogo do Meta, não Marketplace
+
+O canal do Facebook existe, e é importante dizer o que ele **não** é: não há API
+pública para anunciar no Marketplace. A de parceiros (Marketplace Partner
+Program) é fechada, sai por aprovação comercial e atende sobretudo veículos e
+imóveis. O que é aberto é o **catálogo do Commerce Manager**, e é nele que este
+adapter escreve, pela Graph API. O produto publicado aqui abastece a loja do
+Facebook e do Instagram; chega ao Marketplace só para quem está no programa — e,
+aí, o catálogo já é a fonte. A frase está no cabeçalho de
+`lib/integrations/facebook/client.ts` porque a tela, ao mostrar "Facebook" na
+lista de canais, promete sozinha o que a integração não entrega.
+
+Como a OLX, é canal **só de publicação**: conciliação e resolução de pedido
+recusam com essa frase, em vez de "não implementado". A diferença é o motivo —
+a OLX não tem pedido nenhum; a Meta tem checkout, mas só nos Estados Unidos, e a
+venda do Marketplace acontece na conversa entre as pessoas.
+
+O que o adapter faz:
+
+- **`UPDATE` com `allow_upsert`, nunca `CREATE`**: cria o que não existe e edita
+  o que existe, que é o que o modelo de estado desejado pede — a rodada reenvia
+  o valor atual sem saber se o item já está lá.
+- **O identificador do item é o SKU** (`retailer_id`), e não um id nosso como na
+  OLX: é o que o catálogo do cliente já usa, inclusive se ele o alimentar por
+  outra fonte. Em troca, corrigir um SKU aqui deixa o item antigo órfão lá.
+- **Estoque zero esgota, produto desativado remove**: `availability: out of
+  stock` preserva histórico e anúncios; `DELETE` é como se despublica.
+- **Imagem por URL em HTTPS**, nunca embutida — a Meta busca no endereço.
+- **O link é obrigatório e não existe no produto**: vem de `productUrlBase` na
+  configuração do canal, com o SKU no fim. Mesma ideia do telefone e do CEP da
+  OLX, que são do anunciante e não do produto.
+- **Gravação assíncrona**: `items_batch` devolve um `handle` e o destino sai em
+  `check_batch_request_status`. Uma consulta só, sem espera — falha de consulta
+  não derruba item que a Meta já aceitou, e o `handle` fica registrado.
+- **Erro classificado pelo código, não pelo status**: a Meta responde 400 em
+  quase tudo, inclusive em token vencido e em excesso de chamadas. `190` vira
+  reautorização; `4`, `17`, `32`, `613`, `80004` viram nova tentativa; o resto é
+  problema do que mandamos, e repetir só queima as tentativas do anúncio.
+
+Na autorização, duas escolhas próprias da Meta: **não há refresh token** (o
+token longo vale cerca de 60 dias e um vencido não serve nem para pedir outro),
+então a troca pelo token de longa duração acontece **na hora**, e não depois; e
+o escopo `catalog_management` é conferido **na autorização**, porque sem ele a
+conexão nasceria ativa e toda publicação voltaria como falta de permissão, dias
+depois e sem ligação visível com a causa.
+
+Categoria: o catálogo da Meta não exige categoria de canal (a dela é opcional),
+então este canal fica no modo `texto-livre`, sem aba de categoria a preencher.
+
 Categoria ganhou um terceiro modo por causa deles: além de árvore importada
 (Mercado Livre) e texto livre do produto (Sebo), existe **código digitado** —
 Shopee e OLX exigem a categoria deles e a árvore não é importada aqui. Sem esse
@@ -265,6 +314,6 @@ O seed não roda no build: banco novo nasce sem organização e sem usuário, e 
 
 - Os dois provedores foram validados com pedido real em produção. No Mercado Livre foi **um** pedido, de um usuário de teste, com um item, sem frete e sem desconto: o mapeamento de frete, cupom e múltiplos itens continua coberto só por fixture.
 - O portal de desenvolvedores do Mercado Livre responde 403 a consulta automatizada. Os endpoints de autorização e token foram confirmados na prática — a autorização fecha e a conexão é gravada — mas continuam configuráveis por variável.
-- **Shopee e OLX não foram exercitados contra a API real** — nenhuma chamada, nem em sandbox. Tudo que existe vem da documentação pública, com os pontos incertos isolados em variável de ambiente (hosts, caminho de `basic_user_info`) para que um palpite errado se corrija sem deploy. Os testes com dublê provam a nossa metade do contrato: assinatura, envelope, classificação de erro, corpo enviado e mapeamento de pedido.
+- **Shopee, OLX e Facebook não foram exercitados contra a API real** — nenhuma chamada, nem em sandbox. Tudo que existe vem da documentação pública, com os pontos incertos isolados em configuração de canal (hosts, caminho de `basic_user_info`, versão da Graph API) para que um palpite errado se corrija sem deploy. Os testes com dublê provam a nossa metade do contrato: assinatura, envelope, classificação de erro, corpo enviado e mapeamento de pedido.
 - Não houve medição de latência do webhook, teste de carga nem exploração de segurança.
 - A renovação de token do ML nunca rodou de verdade, porque o provedor não emite refresh token para esta aplicação. O caminho está coberto por teste com dublê, incluindo a corrida do compare-and-swap.

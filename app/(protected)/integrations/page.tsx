@@ -12,7 +12,8 @@ const statuses = { PENDING: "Pendente", PROCESSED: "Processado", IGNORED: "Event
 const deliveryStatuses = { PENDING: "Envio pendente", PUBLISHED: "Enviado", FAILED: "Falha no envio" };
 const connectionStatuses = { ACTIVE: "Ativa", INACTIVE: "Inativa", EXPIRED: "Expirada" };
 const providerNames = {
-  MERCADO_LIVRE: "Mercado Livre", SHOPEE: "Shopee", OLX: "OLX", SEBO_ONLINE: "Sebo On-Line",
+  MERCADO_LIVRE: "Mercado Livre", SHOPEE: "Shopee", OLX: "OLX",
+  FACEBOOK: "Facebook", SEBO_ONLINE: "Sebo On-Line",
 };
 
 /**
@@ -30,6 +31,7 @@ const oauthPorProvedor = {
   MERCADO_LIVRE: { rota: "mercadolivre" },
   SHOPEE: { rota: "shopee" },
   OLX: { rota: "olx" },
+  FACEBOOK: { rota: "facebook" },
 } as const;
 
 type ProvedorComOauth = keyof typeof oauthPorProvedor;

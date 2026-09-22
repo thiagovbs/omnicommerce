@@ -15,6 +15,8 @@ const providerPorCodigo: Record<string, MarketplaceProvider> = {
   mercadolivre: "MERCADO_LIVRE",
   shopee: "SHOPEE",
   olx: "OLX",
+  facebook: "FACEBOOK",
+  facebook_marketplace: "FACEBOOK",
   sebo: "SEBO_ONLINE",
   sebo_online: "SEBO_ONLINE",
 };

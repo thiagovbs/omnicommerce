@@ -3,7 +3,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { MarketplaceProvider, PrismaClient } from "@prisma/client";
 import {
   camposDoProvedor, codigoDoProvedor, faltaParaConfigurar, parseMarketplaceSettings,
-  rotuloDoProvedor,
+  PROVEDORES, rotuloDoProvedor,
 } from "../domain/marketplace-config";
 import { objectInput, OrderError, textInput } from "../domain/order-input";
 import { decryptSecret, encryptSecret } from "../integrations/crypto";
@@ -167,7 +167,10 @@ export async function upsertMarketplace(db: PrismaClient, actor: UserActor, inpu
 
 function providerDaEntrada(valor: unknown): MarketplaceProvider {
   const texto = textInput(valor, "Provedor", 40);
-  const conhecidos: MarketplaceProvider[] = ["MERCADO_LIVRE", "SHOPEE", "OLX", "SEBO_ONLINE"];
+  // Derivado do catálogo que a tela oferece: uma lista própria aqui já
+  // ficou para trás uma vez, e o sintoma é a tela oferecer um provedor que
+  // o servidor recusa.
+  const conhecidos: MarketplaceProvider[] = PROVEDORES.map((p) => p.provider);
   const provider = conhecidos.find((p) => p === texto);
   if (!provider) throw new OrderError("Provedor inválido.");
   return provider;

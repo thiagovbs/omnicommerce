@@ -17,7 +17,8 @@ const deliveryStatuses: Record<string, string> = {
   PENDING: "Envio pendente", PUBLISHED: "Enviado", FAILED: "Falha no envio",
 };
 const providerNames: Record<string, string> = {
-  MERCADO_LIVRE: "Mercado Livre", SHOPEE: "Shopee", OLX: "OLX", SEBO_ONLINE: "Sebo On-Line",
+  MERCADO_LIVRE: "Mercado Livre", SHOPEE: "Shopee", OLX: "OLX",
+  FACEBOOK: "Facebook", SEBO_ONLINE: "Sebo On-Line",
 };
 const kinds: Record<string, string> = {
   PROCESSING: "Processamento", DELIVERY: "Entrega",

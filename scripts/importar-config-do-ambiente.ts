@@ -55,6 +55,11 @@ const ORIGEM: Record<MarketplaceProvider, Record<string, string>> = {
     scope: "OLX_SCOPE",
     userInfoPath: "OLX_USER_INFO_PATH",
   },
+  // Vazio de propósito: o canal do Facebook nasceu depois de a configuração
+  // já morar no banco, e nunca teve variável de ambiente para trazer. A
+  // entrada fica aqui para o mapa continuar cobrindo todos os provedores --
+  // o dia em que faltar um, o compilador avisa.
+  FACEBOOK: {},
   SEBO_ONLINE: {
     apiUrl: "SEBO_API_URL",
     webhookSecret: "SEBO_WEBHOOK_SECRET",

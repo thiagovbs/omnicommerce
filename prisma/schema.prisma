@@ -48,6 +48,10 @@ enum MarketplaceProvider {
   /// Classificados: publica anúncio e NÃO tem API de pedido. A jornada de
   /// entrada (aviso -> venda -> baixa de estoque) não existe neste canal.
   OLX
+  /// Catálogo do Meta (Commerce Manager), que alimenta Facebook, Instagram e
+  /// -- para quem está no programa de parceiros -- o Marketplace. Como a OLX,
+  /// só publica: o pedido acontece fora daqui.
+  FACEBOOK
   SEBO_ONLINE
 }
 

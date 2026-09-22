@@ -151,6 +151,52 @@ const CAMPOS: Record<MarketplaceProvider, CampoDeConfig[]> = {
     },
   ],
 
+  FACEBOOK: [
+    {
+      chave: "appId", rotulo: "App ID", tipo: "texto", obrigatorio: true,
+      ajuda: "Identificador do SEU aplicativo no painel de desenvolvedores da"
+        + " Meta, com o caso de uso de gerenciamento de catálogo habilitado.",
+    },
+    {
+      chave: "appSecret", rotulo: "App Secret", tipo: "segredo", obrigatorio: true,
+      ajuda: "Chave secreta do aplicativo. Usada para trocar o código pelo token"
+        + " e para trocá-lo pelo de longa duração. Guardada cifrada.",
+    },
+    {
+      chave: "catalogId", rotulo: "ID do catálogo", tipo: "texto", obrigatorio: true,
+      ajuda: "Catálogo do Commerce Manager que recebe os produtos (só números)."
+        + " É ele que abastece a loja do Facebook, do Instagram e -- para quem"
+        + " está no programa de parceiros -- o Marketplace.",
+    },
+    {
+      chave: "productUrlBase", rotulo: "Endereço base do produto", tipo: "url", obrigatorio: true,
+      ajuda: "A Meta EXIGE um link de destino em cada item e recusa o que não"
+        + " tem. O endereço do produto é montado como base + SKU"
+        + " (ex.: https://sualoja.com.br/p → https://sualoja.com.br/p/SKU-123).",
+    },
+    {
+      chave: "apiVersion", rotulo: "Versão da Graph API", tipo: "texto", obrigatorio: false,
+      padrao: "v23.0", ajuda: "Cada versão da Graph API tem cerca de dois anos de"
+        + " vida. Trocar aqui evita depender de deploy quando a atual for aposentada.",
+    },
+    {
+      chave: "scope", rotulo: "Escopo do OAuth", tipo: "texto", obrigatorio: false,
+      padrao: "catalog_management,business_management",
+      ajuda: "Sem `catalog_management` o token não escreve no catálogo, e toda"
+        + " publicação volta como falta de permissão.",
+    },
+    {
+      chave: "authUrl", rotulo: "URL de autorização", tipo: "url", obrigatorio: false,
+      padrao: "https://www.facebook.com",
+      ajuda: "Onde a pessoa autoriza. Aceita apenas domínio da Meta.",
+    },
+    {
+      chave: "graphUrl", rotulo: "URL da Graph API", tipo: "url", obrigatorio: false,
+      padrao: "https://graph.facebook.com",
+      ajuda: "Base das chamadas de token e de catálogo. Aceita apenas domínio da Meta.",
+    },
+  ],
+
   SEBO_ONLINE: [
     {
       chave: "apiUrl", rotulo: "URL da API do Sebo", tipo: "url", obrigatorio: true,
@@ -166,6 +212,7 @@ export const PROVEDORES: { provider: MarketplaceProvider; rotulo: string; nomeSu
   { provider: "MERCADO_LIVRE", rotulo: "Mercado Livre", nomeSugerido: "Mercado Livre" },
   { provider: "SHOPEE", rotulo: "Shopee", nomeSugerido: "Shopee" },
   { provider: "OLX", rotulo: "OLX (classificados)", nomeSugerido: "OLX" },
+  { provider: "FACEBOOK", rotulo: "Facebook (catálogo do Meta)", nomeSugerido: "Facebook" },
   { provider: "SEBO_ONLINE", rotulo: "Sebo On-Line", nomeSugerido: "Sebo Online" },
 ];
 
@@ -189,6 +236,7 @@ export function codigoDoProvedor(provider: MarketplaceProvider): string {
     case "MERCADO_LIVRE": return "mercado_livre";
     case "SHOPEE": return "shopee";
     case "OLX": return "olx";
+    case "FACEBOOK": return "facebook";
     case "SEBO_ONLINE": return "sebo";
   }
 }

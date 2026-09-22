@@ -151,6 +151,12 @@ export function providerResolver(db: PrismaClient, fetcher: typeof fetch = fetch
           cfg, { accessToken: token, shopId: connection.externalAccountId },
           event.externalOrderId, fetcher));
       }
+      case "FACEBOOK":
+        // O catálogo do Meta não é canal de venda para nós: o checkout do
+        // Facebook é dos Estados Unidos, e a venda do Marketplace acontece
+        // na conversa entre as pessoas. Evento de pedido aqui é sinal de
+        // configuração errada, não de integração faltando.
+        throw new OrderError("O Facebook não tem pedidos aqui: é canal só de publicação.");
       case "OLX":
         // A OLX não tem pedido: ela publica classificado, e o contato do
         // comprador acontece fora. Um evento de pedido neste canal é sinal de

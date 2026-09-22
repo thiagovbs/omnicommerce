@@ -31,6 +31,11 @@ export function providerLister(
           await marketplaceSettings(db, connection.marketplaceId),
           { accessToken: decryptSecret(connection.accessToken), shopId: connection.externalAccountId },
           desde, fetcher);
+      case "FACEBOOK":
+        // Mesmo caso da OLX, por outro motivo: o catálogo do Meta recebe
+        // produto e não devolve pedido. Conciliar aqui seria procurar o
+        // que não existe.
+        throw new OrderError("O Facebook não tem pedidos aqui: é canal só de publicação.");
       case "OLX":
         // Não é omissão: a OLX é classificados e não tem pedido nenhum para
         // conciliar. A venda acontece fora da plataforma, no telefone ou no
