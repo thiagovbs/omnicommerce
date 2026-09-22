@@ -34,7 +34,7 @@ export default async function AuditPage({
   ).toString();
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
         <div className="flex items-center gap-3">
           <div className="bg-slate-100 p-3 rounded-xl">
@@ -107,69 +107,71 @@ export default async function AuditPage({
         </div>
       </form>
 
-      <div className="bg-white border rounded-xl shadow-sm overflow-hidden">
-        <table className="w-full text-left">
-          <thead className="bg-gray-50 border-b text-gray-600 text-sm uppercase tracking-wider">
-            <tr>
-              <th className="px-6 py-4 font-semibold">Data/Hora</th>
-              <th className="px-6 py-4 font-semibold">Usuário</th>
-              <th className="px-6 py-4 font-semibold">Ação/Entidade</th>
-              <th className="px-6 py-4 font-semibold">Detalhes</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y text-sm">
-            {logs.map((log) => (
-              <tr key={log.id} className="hover:bg-gray-50 transition-colors">
-                <td className="px-6 py-4 text-gray-500 whitespace-nowrap">
-                  {format(new Date(log.createdAt), "dd/MM/yyyy HH:mm:ss", { locale: ptBR })}
-                </td>
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
-                      <UserIcon size={14} />
+      <div className="bg-white border rounded-xl shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-gray-50 border-b text-gray-600 text-sm uppercase tracking-wider">
+              <tr>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 font-semibold">Data/Hora</th>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 font-semibold">Usuário</th>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 font-semibold">Ação/Entidade</th>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 font-semibold">Detalhes</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y text-sm">
+              {logs.map((log) => (
+                <tr key={log.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-3 sm:px-6 sm:py-4 text-gray-500 whitespace-nowrap">
+                    {format(new Date(log.createdAt), "dd/MM/yyyy HH:mm:ss", { locale: ptBR })}
+                  </td>
+                  <td className="px-4 py-3 sm:px-6 sm:py-4">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-full bg-blue-50 flex items-center justify-center text-blue-600">
+                        <UserIcon size={14} />
+                      </div>
+                      <div>
+                        <div className="font-medium text-gray-900">{log.user?.name || "Sistema"}</div>
+                        <div className="text-[10px] text-gray-400">{log.user?.email || ""}</div>
+                      </div>
                     </div>
-                    <div>
-                      <div className="font-medium text-gray-900">{log.user?.name || "Sistema"}</div>
-                      <div className="text-[10px] text-gray-400">{log.user?.email || ""}</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-6 py-4">
-                  <div className="flex flex-col gap-1">
-                    <span className={cnActionBadge(log.action)}>
-                      {log.action}
-                    </span>
-                    <span className="flex items-center gap-1 text-[10px] font-bold text-gray-400">
-                      <Tag size={10} /> {log.entity}
-                    </span>
-                  </div>
-                </td>
-                <td className="px-6 py-4">
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div className="flex items-start gap-2 max-w-xs md:max-w-md">
-                      <Info size={14} className="text-gray-300 mt-0.5 flex-shrink-0" />
-                      <span className="text-gray-600 line-clamp-2 italic">
-                        {log.details || "Nenhum detalhe adicional."}
+                  </td>
+                  <td className="px-4 py-3 sm:px-6 sm:py-4">
+                    <div className="flex flex-col gap-1">
+                      <span className={cnActionBadge(log.action)}>
+                        {log.action}
+                      </span>
+                      <span className="flex items-center gap-1 text-[10px] font-bold text-gray-400">
+                        <Tag size={10} /> {log.entity}
                       </span>
                     </div>
-                    <AuditDetailModal 
-                      action={log.action} 
-                      oldData={log.oldData} 
-                      newData={log.newData} 
-                    />
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {logs.length === 0 && (
-              <tr>
-                <td colSpan={4} className="px-6 py-12 text-center text-gray-400">
-                  Nenhuma atividade registrada encontrada para os filtros aplicados.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                  </td>
+                  <td className="px-4 py-3 sm:px-6 sm:py-4">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="flex items-start gap-2 max-w-xs md:max-w-md">
+                        <Info size={14} className="text-gray-300 mt-0.5 flex-shrink-0" />
+                        <span className="text-gray-600 line-clamp-2 italic">
+                          {log.details || "Nenhum detalhe adicional."}
+                        </span>
+                      </div>
+                      <AuditDetailModal 
+                        action={log.action} 
+                        oldData={log.oldData} 
+                        newData={log.newData} 
+                      />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {logs.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-gray-400">
+                    Nenhuma atividade registrada encontrada para os filtros aplicados.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

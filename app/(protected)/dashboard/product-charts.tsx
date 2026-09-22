@@ -94,38 +94,40 @@ export function LowStockTable({ stats }: { stats: ProductStats }) {
     );
   }
   return (
-    <div className="bg-white border rounded-xl shadow-sm overflow-hidden">
-      <div className="px-6 py-4 border-b">
+    <div className="bg-white border rounded-xl shadow-sm">
+      <div className="px-4 py-3 sm:px-6 sm:py-4 border-b">
         <h3 className="text-lg font-semibold">Menor estoque</h3>
         <p className="text-xs text-gray-400">Produtos ativos, do que tem menos para o que tem mais.</p>
       </div>
-      <table className="w-full text-left">
-        <thead className="bg-gray-50/50 border-b">
-          <tr>
-            <th className="px-6 py-3 text-xs font-semibold text-gray-600">SKU</th>
-            <th className="px-6 py-3 text-xs font-semibold text-gray-600">Produto</th>
-            <th className="px-6 py-3 text-xs font-semibold text-gray-600 text-right">Preço</th>
-            <th className="px-6 py-3 text-xs font-semibold text-gray-600 text-right">Estoque</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {stats.estoqueBaixo.map((p) => (
-            <tr key={p.sku} className="hover:bg-gray-50/50">
-              <td className="px-6 py-3 text-sm font-mono text-gray-500">{p.sku}</td>
-              <td className="px-6 py-3 text-sm text-gray-900">{p.titulo}</td>
-              <td className="px-6 py-3 text-sm text-right text-gray-700">{real(p.preco)}</td>
-              <td className="px-6 py-3 text-sm text-right">
-                <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
-                  p.estoque === 0 ? "bg-red-100 text-red-800"
-                    : p.estoque <= 3 ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-700"
-                }`}>
-                  {p.estoque}
-                </span>
-              </td>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left">
+          <thead className="bg-gray-50/50 border-b">
+            <tr>
+              <th className="px-4 py-2.5 sm:px-6 sm:py-3 text-xs font-semibold text-gray-600">SKU</th>
+              <th className="px-4 py-2.5 sm:px-6 sm:py-3 text-xs font-semibold text-gray-600">Produto</th>
+              <th className="px-4 py-2.5 sm:px-6 sm:py-3 text-xs font-semibold text-gray-600 text-right">Preço</th>
+              <th className="px-4 py-2.5 sm:px-6 sm:py-3 text-xs font-semibold text-gray-600 text-right">Estoque</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y">
+            {stats.estoqueBaixo.map((p) => (
+              <tr key={p.sku} className="hover:bg-gray-50/50">
+                <td className="px-4 py-2.5 sm:px-6 sm:py-3 text-sm font-mono text-gray-500">{p.sku}</td>
+                <td className="px-4 py-2.5 sm:px-6 sm:py-3 text-sm text-gray-900">{p.titulo}</td>
+                <td className="px-4 py-2.5 sm:px-6 sm:py-3 text-sm text-right text-gray-700">{real(p.preco)}</td>
+                <td className="px-4 py-2.5 sm:px-6 sm:py-3 text-sm text-right">
+                  <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
+                    p.estoque === 0 ? "bg-red-100 text-red-800"
+                      : p.estoque <= 3 ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-700"
+                  }`}>
+                    {p.estoque}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

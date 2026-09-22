@@ -45,7 +45,7 @@ export default async function UsersPage() {
   if (!currentOrg) return <div className="p-8">Organização não encontrada.</div>;
 
   return (
-    <div className="p-8 max-w-6xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
       <div className="flex justify-between items-center mb-8">
         <div>
           <h1 className="text-3xl font-bold">Equipe</h1>
@@ -63,38 +63,40 @@ export default async function UsersPage() {
       </div>
 
       <div className="bg-white border rounded-xl shadow-sm">
-        <table className="w-full text-left">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="px-6 py-4 text-sm font-semibold">Usuário</th>
-              {platform && <th className="px-6 py-4 text-sm font-semibold">Organização</th>}
-              <th className="px-6 py-4 text-sm font-semibold">Perfil</th>
-              <th className="px-6 py-4 text-sm font-semibold text-right">Ações</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y text-sm">
-            {users.map((user) => (
-              <tr key={user.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4">
-                  <div className="font-medium text-gray-900">{user.name}</div>
-                  <div className="text-gray-500">{user.email}</div>
-                </td>
-                {platform && <td className="px-6 py-4 text-gray-500">{user.organization.name}</td>}
-                <td className="px-6 py-4">
-                  <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                    roleStyles[user.role] ?? roleStyles.OPERATOR
-                  }`}>
-                    <RoleIcon role={user.role} />
-                    {roleLabels[user.role] ?? user.role}
-                  </span>
-                </td>
-                <td className="px-6 py-4 text-right">
-                  {user.id !== actor.userId && <DeleteUserButton userId={user.id} userName={user.name} />}
-                </td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-gray-50 border-b">
+              <tr>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 text-sm font-semibold">Usuário</th>
+                {platform && <th className="px-4 py-3 sm:px-6 sm:py-4 text-sm font-semibold">Organização</th>}
+                <th className="px-4 py-3 sm:px-6 sm:py-4 text-sm font-semibold">Perfil</th>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 text-sm font-semibold text-right">Ações</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y text-sm">
+              {users.map((user) => (
+                <tr key={user.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 sm:px-6 sm:py-4">
+                    <div className="font-medium text-gray-900">{user.name}</div>
+                    <div className="text-gray-500">{user.email}</div>
+                  </td>
+                  {platform && <td className="px-4 py-3 sm:px-6 sm:py-4 text-gray-500">{user.organization.name}</td>}
+                  <td className="px-4 py-3 sm:px-6 sm:py-4">
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      roleStyles[user.role] ?? roleStyles.OPERATOR
+                    }`}>
+                      <RoleIcon role={user.role} />
+                      {roleLabels[user.role] ?? user.role}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 sm:px-6 sm:py-4 text-right">
+                    {user.id !== actor.userId && <DeleteUserButton userId={user.id} userName={user.name} />}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

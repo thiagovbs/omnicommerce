@@ -63,7 +63,7 @@ export default async function EventHistoryPage({ params }: { params: Promise<{ i
 
   const tentativas = evento.attemptLog;
 
-  return <div className="mx-auto max-w-5xl p-8">
+  return <div className="mx-auto max-w-5xl p-4 sm:p-6 lg:p-8">
     <Link href="/integrations" className="text-sm text-blue-700 underline hover:text-blue-900">
       ← Voltar para Integrações
     </Link>
@@ -115,42 +115,44 @@ export default async function EventHistoryPage({ params }: { params: Promise<{ i
       o provedor e aplicar a venda) e a entrega para quem consome os eventos.
     </p>
     {!tentativas.length
-      ? <div className="rounded-xl border bg-white p-6 text-sm text-gray-500">
+      ? <div className="rounded-xl border bg-white p-4 text-sm sm:p-6 text-gray-500">
           Sem tentativas registradas. O registro por tentativa passou a existir
           depois deste evento — o que se sabe dele está em “Último erro”, acima.
         </div>
-      : <div className="overflow-x-auto rounded-xl border bg-white">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b bg-gray-50"><tr>
-              {["Quando", "Etapa", "Nº", "Resultado", "Duração", "Erro"].map((r) =>
-                <th key={r} className="p-4">{r}</th>)}
-            </tr></thead>
-            <tbody className="divide-y">{tentativas.map((t) => <tr key={t.id}>
-              <td className="p-4 whitespace-nowrap">{quando(t.at)}</td>
-              <td className="p-4">{kinds[t.kind] ?? t.kind}</td>
-              <td className="p-4">{t.number}</td>
-              <td className={`p-4 ${outcomes[t.outcome]?.cor ?? ""}`}>
-                {outcomes[t.outcome]?.rotulo ?? t.outcome}
-              </td>
-              <td className="p-4 text-gray-500">
-                {t.durationMs === null ? "—" : `${t.durationMs} ms`}
-              </td>
-              <td className="p-4">
-                {t.errorClass && <div className="font-mono text-xs text-gray-700">{t.errorClass}</div>}
-                {t.error
-                  ? <div className="text-xs text-red-700">{t.error}</div>
-                  : t.errorClass && <div className="text-xs text-gray-500">
-                      Mensagem não registrada: veio de fora e pode carregar credencial.
-                    </div>}
-                {!t.errorClass && !t.error && <span className="text-gray-400">—</span>}
-              </td>
-            </tr>)}</tbody>
-          </table>
+      : <div className="rounded-xl border bg-white">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b bg-gray-50"><tr>
+                {["Quando", "Etapa", "Nº", "Resultado", "Duração", "Erro"].map((r) =>
+                  <th key={r} className="p-3 sm:p-4">{r}</th>)}
+              </tr></thead>
+              <tbody className="divide-y">{tentativas.map((t) => <tr key={t.id}>
+                <td className="p-3 sm:p-4 whitespace-nowrap">{quando(t.at)}</td>
+                <td className="p-3 sm:p-4">{kinds[t.kind] ?? t.kind}</td>
+                <td className="p-3 sm:p-4">{t.number}</td>
+                <td className={`p-3 sm:p-4 ${outcomes[t.outcome]?.cor ?? ""}`}>
+                  {outcomes[t.outcome]?.rotulo ?? t.outcome}
+                </td>
+                <td className="p-3 sm:p-4 text-gray-500">
+                  {t.durationMs === null ? "—" : `${t.durationMs} ms`}
+                </td>
+                <td className="p-3 sm:p-4">
+                  {t.errorClass && <div className="font-mono text-xs text-gray-700">{t.errorClass}</div>}
+                  {t.error
+                    ? <div className="text-xs text-red-700">{t.error}</div>
+                    : t.errorClass && <div className="text-xs text-gray-500">
+                        Mensagem não registrada: veio de fora e pode carregar credencial.
+                      </div>}
+                  {!t.errorClass && !t.error && <span className="text-gray-400">—</span>}
+                </td>
+              </tr>)}</tbody>
+            </table>
+          </div>
         </div>}
 
     <h2 className="mt-8 text-xl font-semibold">Entrega</h2>
     {!evento.outbox
-      ? <div className="mt-3 rounded-xl border bg-white p-6 text-sm text-gray-500">
+      ? <div className="mt-3 rounded-xl border bg-white p-4 text-sm sm:p-6 text-gray-500">
           Sem envio para este evento.
         </div>
       : <dl className="mt-3 grid grid-cols-2 gap-4 rounded-xl border bg-white p-6 md:grid-cols-4">
@@ -176,23 +178,25 @@ export default async function EventHistoryPage({ params }: { params: Promise<{ i
     {evento.auditLogs.length > 0 && <>
       <h2 className="mt-8 text-xl font-semibold">Registro de auditoria</h2>
       <div className="mt-3 overflow-x-auto rounded-xl border bg-white">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b bg-gray-50"><tr>
-            {["Quando", "Quem", "O quê"].map((r) => <th key={r} className="p-4">{r}</th>)}
-          </tr></thead>
-          <tbody className="divide-y">{evento.auditLogs.map((log) => <tr key={log.id}>
-            <td className="p-4 whitespace-nowrap">{quando(log.createdAt)}</td>
-            <td className="p-4">{log.user?.name ?? log.user?.email ?? "Sistema"}</td>
-            <td className="p-4">{log.details ?? `${log.action} ${log.entity}`}</td>
-          </tr>)}</tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b bg-gray-50"><tr>
+              {["Quando", "Quem", "O quê"].map((r) => <th key={r} className="p-3 sm:p-4">{r}</th>)}
+            </tr></thead>
+            <tbody className="divide-y">{evento.auditLogs.map((log) => <tr key={log.id}>
+              <td className="p-3 sm:p-4 whitespace-nowrap">{quando(log.createdAt)}</td>
+              <td className="p-3 sm:p-4">{log.user?.name ?? log.user?.email ?? "Sistema"}</td>
+              <td className="p-3 sm:p-4">{log.details ?? `${log.action} ${log.entity}`}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
       </div>
     </>}
 
     {/* O aviso como chegou. Fechado por padrão porque é diagnóstico, não
         leitura: quem abre a tela quer saber o que falhou, e só desce até aqui
         quando o erro não bastou. */}
-    <details className="mt-8 rounded-xl border bg-white p-6">
+    <details className="mt-8 rounded-xl border bg-white p-4 sm:p-6">
       <summary className="cursor-pointer text-sm font-semibold">Aviso recebido do provedor</summary>
       <pre className="mt-3 overflow-x-auto rounded bg-gray-50 p-4 text-xs">
         {JSON.stringify(evento.payload, null, 2)}

@@ -1,7 +1,7 @@
+import { cookies } from "next/headers";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { Sidebar } from "@/components/sidebar";
-import { Navbar } from "@/components/navbar";
+import { AppShell, COOKIE_MENU } from "@/components/app-shell";
 import { prisma } from "@/lib/prisma";
 
 export default async function ProtectedLayout({
@@ -20,21 +20,20 @@ export default async function ProtectedLayout({
     where: { id: session.user.organizationId }
   });
 
-  return (
-    <div className="flex min-h-screen bg-gray-50">
-      {/* Barra Lateral Fixa */}
-      <Sidebar />
+  // O estado do menu vem do cookie e é lido AQUI, no servidor: assim a página
+  // chega pronta no tamanho escolhido. Lido no cliente, o menu apareceria
+  // largo e encolheria depois, a cada navegação.
+  const recolhida = (await cookies()).get(COOKIE_MENU)?.value === "1";
 
-      {/* Área de Conteúdo */}
-      <div className="flex-1 flex flex-col">
-        <Navbar 
-          userName={session.user.name || "Usuário"} 
-          orgName={org?.name || "Global"} 
-        />
-        <main className="flex-1">
-          {children}
-        </main>
-      </div>
-    </div>
+  // A moldura é cliente porque a gaveta tem estado; `children` continua sendo
+  // renderizado no servidor e atravessa como propriedade.
+  return (
+    <AppShell
+      userName={session.user.name || "Usuário"}
+      orgName={org?.name || "Global"}
+      recolhidaInicial={recolhida}
+    >
+      {children}
+    </AppShell>
   );
 }

@@ -70,7 +70,7 @@ export function ProductsClient({ produtos, canais }: { produtos: ProductRow[]; c
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-8">
+    <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8">
       <div className="flex justify-between items-end mb-8">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Produtos</h1>
@@ -112,7 +112,7 @@ export function ProductsClient({ produtos, canais }: { produtos: ProductRow[]; c
 
       <div className="space-y-4">
         {produtos.map((produto) => (
-          <div key={produto.id} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+          <div key={produto.id} className="bg-white border border-gray-200 rounded-xl shadow-sm">
             <div className="flex items-start justify-between gap-4 p-6">
               <div className="flex min-w-0 items-start gap-4">
                 {produto.images[0] ? (

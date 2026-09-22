@@ -37,8 +37,10 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-100">
-      <form onSubmit={handleSubmit} className="bg-white p-8 rounded-xl shadow-md w-full max-w-sm">
+    // `p-4` no container: `max-w-sm` são 384 px, mais largos que os 375 de um
+    // telefone comum -- sem margem, o cartão saía pela direita da tela.
+    <div className="flex min-h-screen items-center justify-center bg-gray-100 p-4">
+      <form onSubmit={handleSubmit} className="w-full max-w-sm rounded-xl bg-white p-6 shadow-md sm:p-8">
         <h1 className="text-2xl font-bold mb-6">Omnicommerce Login</h1>
         <div className="space-y-4">
           <input name="email" type="email" placeholder="Email" autoComplete="username" className="w-full p-2 border rounded" required />

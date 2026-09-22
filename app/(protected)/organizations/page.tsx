@@ -26,7 +26,7 @@ export default async function OrganizationsPage() {
   });
 
   return (
-    <div className="p-8 max-w-6xl mx-auto">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
       <div className="flex justify-between items-center mb-8">
         <div>
           <h1 className="text-3xl font-bold">Organizações</h1>
@@ -39,54 +39,56 @@ export default async function OrganizationsPage() {
         {platform && <OrganizationForm />}
       </div>
 
-      <div className="bg-white border rounded-xl shadow-sm overflow-hidden">
-        <table className="w-full text-left">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="px-6 py-4 text-sm font-semibold">Nome da Empresa</th>
-              <th className="px-6 py-4 text-sm font-semibold">CNPJ / Praça</th>
-              <th className="px-6 py-4 text-sm font-semibold text-center">Usuários</th>
-              <th className="px-6 py-4 text-sm font-semibold text-center">Marketplaces</th>
-              <th className="px-6 py-4 text-sm font-semibold text-center">Vendas</th>
-              <th className="px-6 py-4 text-sm font-semibold text-right">Ações</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {organizations.map((org) => (
-              <tr key={org.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 flex items-center gap-3">
-                  <Building2 className="text-gray-400" size={20} />
-                  <span className="font-medium">{org.name}</span>
-                  {org.id === actor.organizationId && (
-                    <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">Sua empresa</span>
-                  )}
-                </td>
-                <td className="px-6 py-4 text-sm text-gray-500">
-                  {/* CNPJ e praça: é o que identifica a empresa de verdade, e o
-                      que falta aqui é o que trava publicação de classificado. */}
-                  <div>{org.taxId ? formatarCnpj(org.taxId) : <span className="text-gray-400">sem CNPJ</span>}</div>
-                  <div className="text-xs">
-                    {org.city && org.state
-                      ? `${org.city}/${org.state}`
-                      : <span className="text-gray-400">sem endereço</span>}
-                  </div>
-                </td>
-                <td className="px-6 py-4 text-center text-sm text-gray-500">{org._count.users}</td>
-                <td className="px-6 py-4 text-center text-sm text-gray-500">{org._count.marketplaces}</td>
-                <td className="px-6 py-4 text-center text-sm text-gray-500">{org._count.sales}</td>
-                <td className="px-6 py-4 text-right">
-                  <div className="flex justify-end gap-2">
-                    <OrganizationForm defaultValues={org} />
-                    {/* Deleting the organization you are signed in with would lock you out. */}
-                    {platform && org.id !== actor.organizationId && (
-                      <DeleteOrganizationButton organizationId={org.id} organizationName={org.name} />
-                    )}
-                  </div>
-                </td>
+      <div className="bg-white border rounded-xl shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-gray-50 border-b">
+              <tr>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 text-sm font-semibold">Nome da Empresa</th>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 text-sm font-semibold">CNPJ / Praça</th>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 text-sm font-semibold text-center">Usuários</th>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 text-sm font-semibold text-center">Marketplaces</th>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 text-sm font-semibold text-center">Vendas</th>
+                <th className="px-4 py-3 sm:px-6 sm:py-4 text-sm font-semibold text-right">Ações</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y">
+              {organizations.map((org) => (
+                <tr key={org.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 sm:px-6 sm:py-4 flex items-center gap-3">
+                    <Building2 className="text-gray-400" size={20} />
+                    <span className="font-medium">{org.name}</span>
+                    {org.id === actor.organizationId && (
+                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">Sua empresa</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 sm:px-6 sm:py-4 text-sm text-gray-500">
+                    {/* CNPJ e praça: é o que identifica a empresa de verdade, e o
+                        que falta aqui é o que trava publicação de classificado. */}
+                    <div>{org.taxId ? formatarCnpj(org.taxId) : <span className="text-gray-400">sem CNPJ</span>}</div>
+                    <div className="text-xs">
+                      {org.city && org.state
+                        ? `${org.city}/${org.state}`
+                        : <span className="text-gray-400">sem endereço</span>}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 sm:px-6 sm:py-4 text-center text-sm text-gray-500">{org._count.users}</td>
+                  <td className="px-4 py-3 sm:px-6 sm:py-4 text-center text-sm text-gray-500">{org._count.marketplaces}</td>
+                  <td className="px-4 py-3 sm:px-6 sm:py-4 text-center text-sm text-gray-500">{org._count.sales}</td>
+                  <td className="px-4 py-3 sm:px-6 sm:py-4 text-right">
+                    <div className="flex justify-end gap-2">
+                      <OrganizationForm defaultValues={org} />
+                      {/* Deleting the organization you are signed in with would lock you out. */}
+                      {platform && org.id !== actor.organizationId && (
+                        <DeleteOrganizationButton organizationId={org.id} organizationName={org.name} />
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
