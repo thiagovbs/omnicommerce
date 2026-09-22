@@ -14,6 +14,7 @@ import {
 import { ProviderAuthError, ProviderTransientError } from "../lib/integrations/mercadolivre/client";
 import { providerLister } from "../lib/integrations/reconcile";
 import { providerResolver } from "../lib/integrations/resolve";
+import { enderecoDaImagem, imagemDoProduto } from "../lib/services/product-images";
 import type { ListingWithProduct } from "../lib/services/listings";
 
 /// Nenhuma chamada deste arquivo deve alcançar o banco.
@@ -286,14 +287,100 @@ test("Item do catálogo do Facebook", async (t) => {
     assert.throws(
       () => facebookItemPayload({ ...cfgFb, productUrlBase: "" }, anuncio()),
       /endereço base do produto/);
-    // A Meta busca a imagem pelo endereço: arquivo embutido não tem como ser
-    // lido por ela.
+    assert.throws(() => facebookItemPayload(cfgFb, anuncio({}, { images: [] })), /ao menos uma imagem/);
+    // Endereço http simples: a Meta busca a imagem do servidor dela e recusa.
     assert.throws(
       () => facebookItemPayload(cfgFb, anuncio({}, {
-        images: [{ id: "i1", productId: "p1", position: 0, url: "data:image/png;base64,AAA", createdAt: new Date() }],
+        images: [{ id: "i1", productId: "p1", position: 0, url: "http://exemplo.invalid/a.jpg", createdAt: new Date() }],
       })),
-      /não aceita arquivo embutido/);
-    assert.throws(() => facebookItemPayload(cfgFb, anuncio({}, { images: [] })), /ao menos uma imagem/);
+      /HTTPS/);
+  });
+});
+
+test("Imagem arquivada no banco vira endereço", async (t) => {
+  const embutida = (over = {}) => anuncio({}, {
+    images: [{
+      id: "img-1", productId: "p1", position: 0,
+      url: "data:image/png;base64,iVBORw0KGgo=", createdAt: new Date(),
+    }],
+    ...over,
+  });
+
+  await t.test("o anúncio leva a URL desta aplicação, não o arquivo", () => {
+    comAmbiente(ambiente, () => {
+      const item = facebookItemPayload(cfgFb, embutida());
+      // A Meta busca a imagem no endereço: mandar o data URI seria item
+      // recusado. E recusar o produto obrigaria a recadastrar o álbum à mão.
+      assert.deepEqual(item.data.image, [{
+        url: "https://omnicommerce.vercel.app/api/product-images/img-1",
+      }]);
+    });
+  });
+
+  await t.test("sem APP_URL, a recusa diz o que configurar", () => {
+    comAmbiente({ APP_URL: undefined }, () => {
+      assert.throws(() => facebookItemPayload(cfgFb, embutida()), /APP_URL/);
+    });
+  });
+
+  await t.test("imagem já pública continua indo como está", () => {
+    comAmbiente(ambiente, () => {
+      const item = facebookItemPayload(cfgFb, anuncio());
+      assert.deepEqual(item.data.image, [{ url: IMAGEM }]);
+    });
+  });
+});
+
+test("A rota que serve a imagem", async (t) => {
+  const bancoCom = (url: string | null) => ({
+    productImage: { findUnique: async () => (url === null ? null : { url }) },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  }) as any;
+
+  await t.test("data URI vira bytes com o tipo declarado", async () => {
+    const r = await imagemDoProduto(bancoCom("data:image/png;base64,iVBORw0KGgo="), "img-1");
+    assert.equal(r?.tipo, "image/png");
+    assert.ok(r?.bytes?.length);
+  });
+
+  await t.test("endereço público é redirecionado, não copiado", async () => {
+    const r = await imagemDoProduto(bancoCom("https://exemplo.invalid/a.jpg"), "img-1");
+    assert.equal(r?.redirecionar, "https://exemplo.invalid/a.jpg");
+    assert.equal(r?.bytes, undefined);
+  });
+
+  await t.test("o que não é imagem rasterizada não é servido", async () => {
+    // SVG é documento: servi-lo no nosso domínio seria script nosso rodando
+    // com o nosso endereço. HTML, idem -- e pior.
+    for (const url of [
+      "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+      "data:text/html;base64,PGh0bWw+",
+      "data:image/png,naoEhBase64",
+      "javascript:alert(1)",
+    ]) {
+      assert.equal(await imagemDoProduto(bancoCom(url), "img-1"), null, url);
+    }
+  });
+
+  await t.test("id fora do formato nem chega ao banco", async () => {
+    let consultou = false;
+    const espiao = {
+      productImage: { findUnique: async () => { consultou = true; return null; } },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    assert.equal(await imagemDoProduto(espiao, "../../etc/passwd"), null);
+    assert.equal(consultou, false);
+    assert.equal(await imagemDoProduto(bancoCom(null), "naoexiste123"), null);
+  });
+
+  await t.test("o endereço sai do APP_URL do deploy", () => {
+    comAmbiente(ambiente, () => {
+      assert.equal(enderecoDaImagem("img-1"),
+        "https://omnicommerce.vercel.app/api/product-images/img-1");
+    });
+    comAmbiente({ APP_URL: undefined }, () => {
+      assert.equal(enderecoDaImagem("img-1"), null);
+    });
   });
 });
 

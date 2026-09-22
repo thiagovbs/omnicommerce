@@ -1,6 +1,7 @@
 import "server-only";
 import { OrderError } from "../../domain/order-input";
 import { ListingWithProduct, PublishResult } from "../../services/listings";
+import { enderecoDaImagem } from "../../services/product-images";
 import {
   AvisoDoCatalogo, consultarLoteFacebook, enviarItensFacebook, facebookCatalogId,
 } from "./client";
@@ -20,8 +21,10 @@ import {
  *    não existe e edita o que existe. É o que o modelo de estado desejado
  *    pede: a rodada reenvia o valor atual sem saber se o item já está lá.
  * 3. **Imagem só por URL.** A Meta busca a imagem no endereço informado; não
- *    há upload. Então imagem embutida (`data:`) é recusada por nós, com
- *    mensagem dizendo o que fazer -- a recusa dela viria como item inválido.
+ *    há upload. O álbum daqui guarda arquivo embutido quando alguém sobe uma
+ *    imagem do computador, então o que vai no anúncio é o ENDEREÇO em que
+ *    esta aplicação serve aquela mesma imagem (`/api/product-images/{id}`).
+ *    Recusar seria pedir que um álbum inteiro fosse recadastrado à mão.
  * 4. **Produto desativado vira `DELETE`.** É como se despublica por aqui, e
  *    `active` entra na impressão do anúncio: desativar no catálogo derruba o
  *    item na rodada seguinte.
@@ -74,21 +77,41 @@ function condicaoDe(listing: ListingWithProduct) {
   return traduzida;
 }
 
+/**
+ * As imagens do item, todas como endereço que a Meta consiga buscar.
+ *
+ * O álbum guarda `https://...` quando a imagem foi cadastrada por URL e um
+ * data URI quando o arquivo veio do computador -- e a Meta **não aceita
+ * arquivo embutido**: ela busca a imagem no endereço. Recusar o produto seria
+ * exigir que alguém recadastrasse à mão um álbum inteiro; em vez disso, a
+ * imagem que já está no banco ganha endereço próprio (ver
+ * `services/product-images`), e é ele que vai no anúncio.
+ */
 function imagensDe(listing: ListingWithProduct) {
-  const urls = listing.product.images.map((i) => i.url);
-  if (!urls.length) throw new OrderError("A Meta exige ao menos uma imagem no item do catálogo.");
-  if (urls.some((url) => url.startsWith("data:"))) {
-    throw new OrderError(
-      "A Meta busca a imagem pelo endereço e não aceita arquivo embutido. Cadastre a"
-      + " imagem do produto por URL pública para publicar neste canal.");
-  }
-  const invalida = urls.find((url) => !/^https:\/\//.test(url));
-  if (invalida) {
-    // A Meta busca a imagem do servidor dela: endereço http simples costuma
-    // ser recusado, e o motivo chegaria como item inválido, sem nomear a imagem.
-    throw new OrderError("A Meta exige imagem em HTTPS.");
-  }
-  return urls.slice(0, MAX_IMAGENS).map((url) => ({ url }));
+  const imagens = listing.product.images;
+  if (!imagens.length) throw new OrderError("A Meta exige ao menos uma imagem no item do catálogo.");
+
+  const urls = imagens.slice(0, MAX_IMAGENS).map((imagem) => {
+    if (imagem.url.startsWith("data:")) {
+      const endereco = enderecoDaImagem(imagem.id);
+      if (!endereco) {
+        // Sem `APP_URL` não há endereço a oferecer, e mandar o data URI faria
+        // a Meta recusar o item com uma mensagem que não ajuda ninguém.
+        throw new OrderError(
+          "A imagem deste produto está arquivada no banco e a Meta busca a imagem pelo"
+          + " endereço. Configure APP_URL neste deploy para que ela seja servida.");
+      }
+      return endereco;
+    }
+    if (!/^https:\/\//.test(imagem.url)) {
+      // A Meta busca a imagem do servidor dela: endereço http simples costuma
+      // ser recusado, e o motivo chegaria como item inválido, sem nomear a imagem.
+      throw new OrderError("A Meta exige imagem em HTTPS.");
+    }
+    return imagem.url;
+  });
+
+  return urls.map((url) => ({ url }));
 }
 
 /// A página do produto, montada com a base do canal. Ver o ponto 5.

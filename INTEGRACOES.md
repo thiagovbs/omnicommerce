@@ -98,6 +98,26 @@ O que cada um tem:
   produto desativado vira `operation: delete`. A importação é assíncrona: o `PUT`
   devolve um token e o destino de cada anúncio sai numa segunda chamada.
 
+## Imagem arquivada no banco, anúncio que precisa de endereço
+
+O álbum guarda `https://...` quando a imagem é cadastrada por URL e um **data
+URI em base64** quando o arquivo vem do computador. Isso resolveu o cadastro e
+criou outro problema: canal de anúncio **busca a imagem no endereço** — a Meta,
+a OLX e a Shopee não aceitam arquivo embutido. Os três produtos deste catálogo
+estão todos em base64, então nenhum deles publicaria no Facebook.
+
+A saída foi dar endereço ao que já existe, em vez de migrar dado ou contratar
+armazenamento: `GET /api/product-images/{id}` serve a imagem do banco, e o
+adapter do Facebook manda esse endereço no lugar do arquivo. Duas restrições
+que não são detalhe: só tipo de imagem rasterizada (servir SVG ou HTML do nosso
+domínio seria script nosso com o nosso endereço) e `nosniff`.
+
+O outro lado do mesmo problema é o **link de destino**: a Meta exige uma página
+por item e o Sebo não tinha rota de produto — a vitrine é uma página só. Agora
+há `GET /products/sku/{sku}` na loja e `/produto/:sku` no front, que é o que
+`productUrlBase` monta. Só produto ativo responde: o item sai do catálogo do
+canal quando é desativado, e anunciar o que não está à venda é pior que um 404.
+
 ## Aviso de pedido que não existe mais
 
 Uma venda do Sebo demorou a aparecer, e o rastro explicou três coisas de uma vez.
