@@ -77,6 +77,33 @@ test("histórico de tentativas sem banco", async (t) => {
       "a classe entra: é ela que separa rede de defeito nosso");
   });
 
+  await t.test("classe minificada não apaga o registro", async () => {
+    // Regressão de produção: o build da Vercel é minificado, e
+    // `error.constructor.name` devolvia "i". O nome encurtado não casava com a
+    // lista de erros nossos, então o histórico gravava uma letra como classe e
+    // NENHUMA mensagem -- justamente nos erros que podiam ser mostrados. Não
+    // aparecia em teste nenhum, porque teste roda sem minificar.
+    const gravadas: Record<string, unknown>[] = [];
+    const db = {
+      integrationEventAttempt: {
+        create: async (args: { data: Record<string, unknown> }) => { gravadas.push(args.data); },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    // É assim que a classe chega depois do minificador: o nome do construtor
+    // vira uma letra, e só `name` continua dizendo o que ela é.
+    class i extends OrderError {}
+    const erro = new i("Pedido não encontrado no Sebo On-Line.");
+    assert.equal(erro.constructor.name, "i", "o cenário do teste é esse mesmo");
+
+    await registrarTentativa(db, {
+      eventId: "e", number: 1, kind: "PROCESSING", outcome: "PERMANENT", error: erro,
+    });
+    assert.equal(gravadas[0].errorClass, "OrderError");
+    assert.equal(gravadas[0].error, "Pedido não encontrado no Sebo On-Line.");
+  });
+
   await t.test("mensagem longa é truncada: o histórico é para ler", async () => {
     const gravadas: Record<string, unknown>[] = [];
     const db = {

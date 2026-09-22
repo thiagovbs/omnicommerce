@@ -2,7 +2,7 @@ import "server-only";
 import { Receiver } from "@upstash/qstash";
 import { EventPublisher } from "../services/outbox";
 
-export class MessagingConfigurationError extends Error {}
+export class MessagingConfigurationError extends Error { override name = "MessagingConfigurationError"; }
 
 export function messagingConfig() {
   const { APP_URL, QSTASH_TOKEN, QSTASH_CURRENT_SIGNING_KEY, QSTASH_NEXT_SIGNING_KEY } = process.env;

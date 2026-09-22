@@ -5,6 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import { encryptSecret } from "../lib/integrations/crypto";
 import { hashDeBusca } from "../lib/services/marketplaces";
 import { OrderError } from "../lib/domain/order-input";
+import { ProviderOrderGoneError } from "../lib/integrations/mercadolivre/client";
 import { handleMercadoLivreNotification } from "../lib/integrations/mercadolivre/webhook";
 import {
   MAX_PROCESSING_ATTEMPTS, OrderSnapshotResolver, processOrderEvent, recordOrderEvent,
@@ -168,6 +169,30 @@ test("recepção, conexão e teto de tentativas em PostgreSQL", async (t) => {
       assert.equal(failed.status, "FAILED");
       assert.equal(failed.attempts, 1);
       assert.equal(failed.lastError, "Status desconhecido do provedor.");
+    });
+
+    await t.test("pedido que não existe mais no provedor ENCERRA o evento", async () => {
+      // Aconteceu com 224 eventos de uma vez: a loja tinha apagado pedidos
+      // antigos e continuou avisando sobre eles. Cada um virava "Requer
+      // atenção" para sempre, e ninguém tinha o que fazer a respeito -- o
+      // pedido não volta. Fica IGNORADO, e as falhas de verdade voltam a ser
+      // visíveis na tela.
+      const event = await recordOrderEvent(db, {
+        marketplaceId: channel.id, connectionId: connection.id, externalEventId: "sumiu",
+        externalOrderId: "gone-1", payload: snapshot("gone-1"),
+      });
+      // Não relança: a entrega cumpriu o papel dela, e repetir a mensagem não
+      // mudaria o desfecho.
+      assert.equal(await processOrderEvent(db, event.id, async () => {
+        throw new ProviderOrderGoneError("Pedido não encontrado no Sebo On-Line.");
+      }), "IGNORED");
+      const encerrado = await db.integrationEvent.findUniqueOrThrow({ where: { id: event.id } });
+      assert.equal(encerrado.status, "IGNORED");
+      assert.ok(encerrado.processedAt, "encerrado tem data de conclusão");
+      // O motivo fica: é ele que explica por que não virou venda.
+      assert.equal(encerrado.lastError, "Pedido não encontrado no Sebo On-Line.");
+      // E nenhuma venda foi criada a partir de um pedido que não existe.
+      assert.equal(await db.sale.count({ where: { externalOrderId: "gone-1" } }), 0);
     });
 
     await t.test("falha transitória repete até o teto e então para de ser reprocessada", async () => {

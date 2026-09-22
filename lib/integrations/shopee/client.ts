@@ -33,7 +33,7 @@ import { ProviderAuthError, ProviderTransientError } from "../mercadolivre/clien
 const HOST_PRODUCAO = "https://partner.shopeemobile.com";
 const HOST_SANDBOX = "https://partner.test-stable.shopeemobile.com";
 
-export class ShopeeConfigurationError extends Error {}
+export class ShopeeConfigurationError extends Error { override name = "ShopeeConfigurationError"; }
 
 export interface ShopeeConfig {
   partnerId: string;

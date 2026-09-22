@@ -1,7 +1,7 @@
 import "server-only";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
-export class SecretConfigurationError extends Error {}
+export class SecretConfigurationError extends Error { override name = "SecretConfigurationError"; }
 
 function key() {
   const raw = process.env.INTEGRATION_ENCRYPTION_KEY;

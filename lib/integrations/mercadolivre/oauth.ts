@@ -23,7 +23,7 @@ const TOKEN_BASE_PADRAO = "https://api.mercadolibre.com/oauth/token";
 // antiga e o escopo pedido aqui não tem efeito.
 const SCOPE_PADRAO = "offline_access read write";
 
-export class OAuthConfigurationError extends Error {}
+export class OAuthConfigurationError extends Error { override name = "OAuthConfigurationError"; }
 
 function origem(valor: string, nome: string, permitidos: RegExp) {
   let url: URL;

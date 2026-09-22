@@ -42,7 +42,7 @@ const VERSAO_PADRAO = "v23.0";
 /// Teto declarado do corpo de `items_batch`.
 const LIMITE_CORPO_BYTES = 28 * 1024 * 1024;
 
-export class FacebookConfigurationError extends Error {}
+export class FacebookConfigurationError extends Error { override name = "FacebookConfigurationError"; }
 
 function baseDaMeta(bruto: string, nome: string) {
   let url: URL;

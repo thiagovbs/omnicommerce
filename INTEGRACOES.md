@@ -98,6 +98,39 @@ O que cada um tem:
   produto desativado vira `operation: delete`. A importação é assíncrona: o `PUT`
   devolve um token e o destino de cada anúncio sai numa segunda chamada.
 
+## Aviso de pedido que não existe mais
+
+Uma venda do Sebo demorou a aparecer, e o rastro explicou três coisas de uma vez.
+O aviso tinha chegado em segundos; o que atrasou foi a fila. Na hora em que a
+loja voltou a receber compra, ela despejou **46 avisos atrasados de uma vez** --
+a fila dela só é esvaziada quando alguém compra --, e a venda nova entrou atrás
+de todos. O despachante mandava **4 por rodada a cada 5 minutos**: uma hora de
+espera. E a maior parte daqueles 46 apontava para pedidos que a loja **já tinha
+apagado**, então cada um virava uma consulta que respondia 404 e uma falha
+permanente aqui. Eram 224 eventos assim, todos pedindo atenção numa tela onde
+ninguém podia fazer nada a respeito.
+
+O conserto é dos dois lados, e cada um resolve uma coisa:
+
+- **No Sebo (quem avisa)**: o aviso de um pedido apagado é descartado **antes de
+  sair** (`DISCARDED`/`ORDER_GONE`), e o mesmo vale para aviso que envelheceu na
+  fila além do prazo (`TOO_OLD`, três dias por padrão). Anunciar um pedido que
+  não se pode servir é o defeito na origem; pedido antigo entra pela
+  conciliação, que existe para isso.
+- **Aqui (quem recebe)**: 404 ao ler o pedido virou `ProviderOrderGoneError`, e
+  o evento é **encerrado** (`IGNORED`) em vez de marcado como falha. Continua
+  permanente -- repetir não traz o pedido de volta --, mas não pede atenção,
+  porque não há nada a corrigir. E o despacho subiu para **20 por rodada**, que
+  drena uma rajada em uma ou duas rodadas em vez de uma hora.
+
+No caminho apareceu um defeito que só existia em produção: o histórico de
+tentativas classificava o erro por `error.constructor.name`, e **o build é
+minificado** -- a classe chegava como `"i"`. Como o nome nunca casava com a
+lista de erros nossos, o histórico gravava uma letra e **nenhuma mensagem**,
+justamente nos erros que podiam ser mostrados. Nenhum teste pegava, porque teste
+roda sem minificar. Agora cada classe nossa declara `name` como texto (que o
+minificador não toca) e o registro usa `error.name`.
+
 ## Facebook: catálogo do Meta, não Marketplace
 
 O canal do Facebook existe, e é importante dizer o que ele **não** é: não há API

@@ -5,9 +5,21 @@ import { OrderError } from "../../domain/order-input";
 export const API_ORIGIN = "https://api.mercadolibre.com";
 
 /// Credencial recusada: exige reautorizar a conexão, não adianta repetir.
-export class ProviderAuthError extends Error {}
+export class ProviderAuthError extends Error { override name = "ProviderAuthError"; }
+
+/**
+ * O provedor respondeu que o pedido NÃO EXISTE.
+ *
+ * É permanente como qualquer `OrderError` -- repetir não traz o pedido de
+ * volta --, mas é o único permanente que não pede nada de ninguém: não há
+ * cadastro a corrigir nem credencial a renovar. Aconteceu com 224 eventos de
+ * uma vez, todos apontando para pedidos que a loja tinha apagado, e todos
+ * pedindo atenção na tela para sempre. Por isso o evento é ENCERRADO em vez de
+ * marcado como falha.
+ */
+export class ProviderOrderGoneError extends OrderError { override name = "ProviderOrderGoneError"; }
 /// Indisponibilidade ou limite de taxa: vale repetir depois.
-export class ProviderTransientError extends Error {}
+export class ProviderTransientError extends Error { override name = "ProviderTransientError"; }
 
 export async function fetchOrder(accessToken: string, orderId: string, fetcher: typeof fetch = fetch) {
   if (!/^\d{1,30}$/.test(orderId)) throw new OrderError("Pedido externo inválido.");

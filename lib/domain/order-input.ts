@@ -1,7 +1,7 @@
 import { Currency, Prisma } from "@prisma/client";
 import { isOrderStatus } from "./sale-status";
 
-export class OrderError extends Error {}
+export class OrderError extends Error { override name = "OrderError"; }
 
 export function objectInput(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

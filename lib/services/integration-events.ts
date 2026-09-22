@@ -1,6 +1,7 @@
 import "server-only";
 import { MarketplaceConnection, Prisma, PrismaClient } from "@prisma/client";
 import { objectInput, OrderError, parseIntegratedOrder, textInput } from "../domain/order-input";
+import { ProviderOrderGoneError } from "../integrations/mercadolivre/client";
 import { applyIntegratedOrder } from "./sales";
 import { registrarTentativa } from "./event-history";
 import { serializable } from "./transactions";
@@ -126,6 +127,21 @@ export async function processOrderEvent(db: PrismaClient, eventId: string, resol
       return outcome;
     });
   } catch (error) {
+    // O provedor não tem mais o pedido: encerra o evento em vez de deixá-lo
+    // pedindo atenção para sempre. Não é sucesso nem falha -- é um aviso que
+    // aponta para o que não existe, e nada que alguém faça aqui muda isso.
+    if (error instanceof ProviderOrderGoneError) {
+      await db.integrationEvent.updateMany({ where: { id: eventId, status: "PENDING" }, data: {
+        status: "IGNORED", processedAt: new Date(), lastError: error.message,
+      } });
+      await registrarTentativa(db, {
+        eventId, number: attempts, kind: "PROCESSING", outcome: "PERMANENT",
+        durationMs: Date.now() - comecou, error,
+      });
+      // Sem relançar: a entrega cumpriu o papel dela, e repetir a mensagem
+      // não mudaria o desfecho.
+      return "IGNORED";
+    }
     const permanent = error instanceof OrderError;
     await db.integrationEvent.updateMany({ where: { id: eventId, status: "PENDING" }, data: {
       status: permanent || attempts >= MAX_PROCESSING_ATTEMPTS ? "FAILED" : "PENDING",

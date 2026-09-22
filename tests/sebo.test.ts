@@ -3,7 +3,9 @@ import test from "node:test";
 import { randomBytes } from "node:crypto";
 import { OrderError, parseIntegratedOrder } from "../lib/domain/order-input";
 import { encryptSecret } from "../lib/integrations/crypto";
-import { ProviderAuthError, ProviderTransientError } from "../lib/integrations/mercadolivre/client";
+import {
+  ProviderAuthError, ProviderOrderGoneError, ProviderTransientError,
+} from "../lib/integrations/mercadolivre/client";
 import { providerResolver } from "../lib/integrations/resolve";
 import { fetchSeboOrder, seboApiBase, SeboConfigurationError } from "../lib/integrations/sebo/client";
 
@@ -174,6 +176,11 @@ test("adapter do Sebo On-Line sem rede e sem banco", async (t) => {
       await assert.rejects(fetchSeboOrder(cfgSebo, "t", "1", status(401)), ProviderAuthError);
       await assert.rejects(fetchSeboOrder(cfgSebo, "t", "1", status(429)), ProviderTransientError);
       await assert.rejects(fetchSeboOrder(cfgSebo, "t", "1", status(502)), ProviderTransientError);
+      // 404 tem classe própria: é a loja dizendo que o pedido não existe mais,
+      // e o evento é ENCERRADO em vez de ficar pedindo atenção para sempre.
+      await assert.rejects(
+        fetchSeboOrder(cfgSebo, "t", "1", status(404)), ProviderOrderGoneError);
+      // E continua sendo permanente: repetir não traz o pedido de volta.
       await assert.rejects(fetchSeboOrder(cfgSebo, "t", "1", status(404)), OrderError);
       await fetchSeboOrder(cfgSebo, "token-de-servico", "1", status(401)).catch((error: Error) => {
         assert.equal(error.message.includes("token-de-servico"), false);

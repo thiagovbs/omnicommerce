@@ -31,7 +31,7 @@ const TOKEN_PADRAO = "https://auth.olx.com.br/oauth/token";
 /// pior, pede ao anunciante permissão que não vamos usar.
 const ESCOPO_PADRAO = "basic_user_info autoupload";
 
-export class OlxOAuthConfigurationError extends Error {}
+export class OlxOAuthConfigurationError extends Error { override name = "OlxOAuthConfigurationError"; }
 
 function origem(valor: string, nome: string) {
   let url: URL;

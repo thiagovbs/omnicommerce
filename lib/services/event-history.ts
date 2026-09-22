@@ -25,6 +25,15 @@ import { assertActor, UserActor } from "./actor";
  *   separa `TypeError` (defeito nosso) de `ProviderTransientError` (o provedor
  *   caiu) de `PrismaClientKnownRequestError` (o banco recusou).
  *
+ * ## Por que `error.name`, e não `error.constructor.name`
+ *
+ * Porque o build de produção é MINIFICADO. `constructor.name` devolvia o nome
+ * encurtado da classe -- `"i"`, `"a"` --, que nunca casava com a lista abaixo:
+ * o histórico gravava uma letra como classe e NENHUMA mensagem, justamente nos
+ * erros que são nossos. O defeito não aparecia em teste nenhum, porque teste
+ * roda sem minificar. `name` é declarado como texto em cada classe, e texto o
+ * minificador não toca.
+ *
  * Um dia em que isso for relaxado, o log vira um lugar onde credencial aparece
  * -- e credencial que apareceu precisa ser trocada no provedor.
  */
@@ -36,10 +45,11 @@ const LIMITE_MENSAGEM = 500;
 /// Erros nossos: a mensagem deles é escrita por nós e pode ser mostrada.
 /// `OrderError` é o erro de regra; os de provedor carregam códigos nossos.
 const NOSSOS = new Set([
-  "OrderError", "ProviderAuthError", "ProviderTransientError",
+  "OrderError", "ProviderAuthError", "ProviderTransientError", "ProviderOrderGoneError",
   "OAuthConfigurationError", "OlxOAuthConfigurationError",
   "ShopeeConfigurationError", "SeboConfigurationError", "OlxConfigurationError",
-  "SecretConfigurationError",
+  "FacebookConfigurationError", "FacebookOAuthConfigurationError",
+  "SecretConfigurationError", "MessagingConfigurationError", "PartialPublishError",
 ]);
 
 export interface TentativaRegistrada {
@@ -62,7 +72,7 @@ export async function registrarTentativa(
   db: PrismaClient | Prisma.TransactionClient, tentativa: TentativaRegistrada,
 ) {
   const { error } = tentativa;
-  const classe = error instanceof Error ? error.constructor.name : undefined;
+  const classe = error instanceof Error ? error.name : undefined;
   const mensagem = error instanceof Error && classe && NOSSOS.has(classe)
     ? error.message.slice(0, LIMITE_MENSAGEM)
     : undefined;

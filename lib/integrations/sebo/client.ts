@@ -1,8 +1,10 @@
 import "server-only";
 import { objectInput, OrderError } from "../../domain/order-input";
-import { ProviderAuthError, ProviderTransientError } from "../mercadolivre/client";
+import {
+  ProviderAuthError, ProviderOrderGoneError, ProviderTransientError,
+} from "../mercadolivre/client";
 
-export class SeboConfigurationError extends Error {}
+export class SeboConfigurationError extends Error { override name = "SeboConfigurationError"; }
 
 // O sebo é exposto pelo gateway da Sensedia, que pode servir sob um prefixo de
 // caminho — por isso a base preserva o pathname em vez de usar só a origem.
@@ -40,7 +42,11 @@ export async function fetchSeboOrder(
   });
   // Nenhuma mensagem de erro carrega token ou corpo da resposta.
   if (response.status === 401 || response.status === 403) throw new ProviderAuthError("SEBO_UNAUTHORIZED");
-  if (response.status === 404) throw new OrderError("Pedido não encontrado no Sebo On-Line.");
+  // 404 aqui não é "falhou": é a loja dizendo que este pedido não existe
+  // mais. Repetir não o traz de volta, e não há cadastro a corrigir.
+  if (response.status === 404) {
+    throw new ProviderOrderGoneError("Pedido não encontrado no Sebo On-Line.");
+  }
   if (response.status === 429 || response.status >= 500) throw new ProviderTransientError("SEBO_UNAVAILABLE");
   if (!response.ok) throw new OrderError("Falha ao consultar o pedido no Sebo On-Line.");
   return response.json() as Promise<unknown>;

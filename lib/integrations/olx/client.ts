@@ -26,7 +26,7 @@ const BASE_PADRAO = "https://apps.olx.com.br";
 /// Teto de corpo da requisição declarado pela OLX.
 const LIMITE_CORPO_BYTES = 1024 * 1024;
 
-export class OlxConfigurationError extends Error {}
+export class OlxConfigurationError extends Error { override name = "OlxConfigurationError"; }
 
 /// Base do autoupload, vinda do cadastro do canal (era `OLX_API_URL`).
 export function olxApiBase(cfg: Record<string, string>) {

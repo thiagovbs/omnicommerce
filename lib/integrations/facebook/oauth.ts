@@ -33,7 +33,7 @@ import { facebookAuthBase, facebookGraphBase, FacebookConfigurationError } from 
 /// Sem isto o token não escreve no catálogo, e a conexão nasceria inútil.
 const ESCOPO_OBRIGATORIO = "catalog_management";
 
-export class FacebookOAuthConfigurationError extends Error {}
+export class FacebookOAuthConfigurationError extends Error { override name = "FacebookOAuthConfigurationError"; }
 
 export function facebookOauthConfig(cfg: Record<string, string>) {
   const { APP_URL } = process.env;
