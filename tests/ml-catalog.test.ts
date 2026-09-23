@@ -51,8 +51,12 @@ function anuncio(over: Partial<ListingWithProduct> = {}, produtoOver = {}): List
 /// Dublê que responde por rota e registra o que foi enviado. A chave pode
 /// levar o método antes da rota -- "POST /description" -- para quando a mesma
 /// URL responde diferente a cada verbo.
-function provedor(rotas: Record<string, { status?: number; corpo: unknown }>) {
-  const chamadas: { url: string; metodo: string; corpo: unknown }[] = [];
+function provedor(
+  rotas: Record<string, { status?: number; corpo: unknown; headers?: Record<string, string> }>,
+) {
+  const chamadas: {
+    url: string; metodo: string; corpo: unknown; headers: Record<string, string>;
+  }[] = [];
   const fetcher = (async (url: string, init: RequestInit = {}) => {
     const chave = Object.keys(rotas).find((r) => {
       const [metodo, rota] = r.includes(" ") ? r.split(" ") : ["", r];
@@ -67,11 +71,15 @@ function provedor(rotas: Record<string, { status?: number; corpo: unknown }>) {
         ? { multipart: true, nome: arquivo.name, tipo: arquivo.type }
         : { multipart: true };
     }
-    chamadas.push({ url, metodo: init.method ?? "GET", corpo: corpoEnviado });
+    chamadas.push({
+      url, metodo: init.method ?? "GET", corpo: corpoEnviado,
+      headers: (init.headers ?? {}) as Record<string, string>,
+    });
     if (!chave) return new Response("{}", { status: 404 });
     const rota = rotas[chave];
     return new Response(JSON.stringify(rota.corpo), {
-      status: rota.status ?? 200, headers: { "content-type": "application/json" },
+      status: rota.status ?? 200,
+      headers: { "content-type": "application/json", ...(rota.headers ?? {}) },
     });
   }) as unknown as typeof fetch;
   return { fetcher, chamadas };
@@ -384,5 +392,90 @@ test("descrição do anúncio no Mercado Livre", async (t) => {
       publishMercadoLivreListing("t", anuncio({}, { description: "Texto." }), fetcher),
       (e: Error) => e instanceof PartialPublishError
         && (e as PartialPublishError).causa instanceof ProviderAuthError);
+  });
+});
+
+test("atualização de anúncio no Mercado Livre", async (t) => {
+  const publicado = (over = {}) => anuncio({ externalListingId: "MLB123", ...over });
+
+  await t.test("estoque de item com User Product muda no produto, não no item", async () => {
+    // O provedor responde `available_quantity is not modifiable` a quem tenta
+    // mudar o estoque no item: ali ele é espelho do produto do usuário.
+    const { fetcher, chamadas } = provedor({
+      "GET /items/MLB123": { corpo: { id: "MLB123", status: "active", sub_status: [], user_product_id: "MLBU9" } },
+      "GET /user-products/MLBU9/stock": {
+        corpo: { locations: [{ type: "seller_warehouse", quantity: 1 }] },
+        headers: { "x-version": "42" },
+      },
+      "PUT /user-products/MLBU9/stock/type/seller_warehouse": { corpo: {} },
+      "PUT /items/MLB123": { corpo: { id: "MLB123", price: 42.5, status: "active" } },
+    });
+
+    const r = await publishMercadoLivreListing("t", publicado(), fetcher);
+    const estoque = chamadas.find((c) => c.url.includes("/stock/type/"));
+    assert.equal(estoque?.metodo, "PUT");
+    assert.deepEqual(estoque?.corpo, { quantity: 4 });
+    // Sem `x-version` o provedor recusa com 400: é o controle de concorrência dele.
+    assert.equal(estoque?.headers["x-version"], "42");
+
+    // E o item recebe SÓ o preço.
+    const item = chamadas.find((c) => c.metodo === "PUT" && c.url.endsWith("/items/MLB123"));
+    assert.deepEqual(item?.corpo, { price: 42.5 });
+    // O estoque registrado é o que acabou de ser gravado no produto do usuário,
+    // porque a resposta do item não o traz.
+    assert.equal(r.stock, 4);
+    assert.equal(r.price, "42.50");
+  });
+
+  await t.test("anúncio do modelo antigo continua atualizando preço e estoque juntos", async () => {
+    const { fetcher, chamadas } = provedor({
+      "GET /items/MLB123": { corpo: { id: "MLB123", status: "active", sub_status: [] } },
+      "PUT /items/MLB123": { corpo: { id: "MLB123", price: 42.5, available_quantity: 4, status: "active" } },
+    });
+    await publishMercadoLivreListing("t", publicado(), fetcher);
+    const item = chamadas.find((c) => c.metodo === "PUT");
+    assert.deepEqual(item?.corpo, { price: 42.5, available_quantity: 4 });
+    // Sem User Product não há estoque separado a consultar.
+    assert.equal(chamadas.some((c) => c.url.includes("/user-products/")), false);
+  });
+
+  await t.test("anúncio em revisão é recusado com o motivo, sem tentar escrever", async () => {
+    // Foi o caso real: "price is not modifiable | available_quantity is not
+    // modifiable" não é dado inválido nosso -- é o anúncio congelado pela
+    // moderação, e insistir não resolve.
+    const { fetcher, chamadas } = provedor({
+      "GET /items/MLB123": {
+        corpo: { id: "MLB123", status: "under_review", sub_status: ["forbidden"], user_product_id: "MLBU9" },
+      },
+    });
+    await assert.rejects(
+      publishMercadoLivreListing("t", publicado(), fetcher),
+      (e: Error) => e instanceof OrderError
+        && /em revisão/.test(e.message) && /forbidden/.test(e.message));
+    assert.equal(chamadas.every((c) => c.metodo === "GET"), true, "não pode escrever nada");
+  });
+
+  await t.test("estoque de Fulfillment é recusado dizendo por quê", async () => {
+    const { fetcher } = provedor({
+      "GET /items/MLB123": { corpo: { id: "MLB123", status: "active", sub_status: [], user_product_id: "MLBU9" } },
+      "GET /user-products/MLBU9/stock": {
+        corpo: { locations: [{ type: "meli_facility", quantity: 3 }] },
+        headers: { "x-version": "7" },
+      },
+    });
+    await assert.rejects(
+      publishMercadoLivreListing("t", publicado(), fetcher),
+      (e: Error) => e instanceof OrderError && /Fulfillment/.test(e.message));
+  });
+
+  await t.test("sem x-version a atualização nem é tentada", async () => {
+    const { fetcher, chamadas } = provedor({
+      "GET /items/MLB123": { corpo: { id: "MLB123", status: "active", sub_status: [], user_product_id: "MLBU9" } },
+      "GET /user-products/MLBU9/stock": { corpo: { locations: [{ type: "selling_address", quantity: 1 }] } },
+    });
+    await assert.rejects(
+      publishMercadoLivreListing("t", publicado(), fetcher),
+      (e: Error) => e instanceof OrderError && /x-version/.test(e.message));
+    assert.equal(chamadas.some((c) => c.metodo === "PUT"), false);
   });
 });

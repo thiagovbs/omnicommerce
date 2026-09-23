@@ -98,6 +98,29 @@ O que cada um tem:
   produto desativado vira `operation: delete`. A importação é assíncrona: o `PUT`
   devolve um token e o destino de cada anúncio sai numa segunda chamada.
 
+## Mercado Livre: estoque mudou de lugar
+
+`PUT /items/{id}` com preço e estoque voltou recusado: *"price is not
+modifiable | available_quantity is not modifiable"*. A mensagem não diz o
+motivo, e são **dois** motivos diferentes:
+
+- **Estoque**: no modelo **User Product** (anúncios com `user_product_id`, tag
+  `user_product_listing`), `available_quantity` do item é ESPELHO — o Mercado
+  Livre o sincroniza a partir do produto do usuário. Muda-se em
+  `PUT /user-products/{id}/stock/type/{seller_warehouse|selling_address}`, com
+  o cabeçalho `x-version` obtido no `GET .../stock` (sem ele, 400; desatualizado,
+  conflito — que é o certo, porque significa que alguém mexeu no meio).
+  Estoque em `meli_facility` é Fulfillment e não se edita por API: quem repõe é
+  a mercadoria chegando ao depósito.
+- **Preço**: continua no item, porque é condição de venda. O que o bloqueou no
+  caso real foi outra coisa — o anúncio estava `under_review` com
+  `sub_status: forbidden`, e anúncio em revisão não aceita alteração nenhuma.
+
+Por isso a atualização passou a **consultar o anúncio antes de escrever**. A
+consulta se paga: ela separa "o provedor congelou este anúncio" de "o estoque
+mora noutro lugar" — duas coisas que a mensagem do provedor junta numa frase
+só, e que pedem ações opostas de quem opera.
+
 ## Imagem arquivada no banco, anúncio que precisa de endereço
 
 O álbum guarda `https://...` quando a imagem é cadastrada por URL e um **data

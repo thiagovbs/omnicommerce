@@ -274,6 +274,124 @@ async function enviarDescricao(
  * mandá-la numa atualização faria o anúncio inteiro ser recusado por causa de
  * um campo que nem mudou.
  */
+/**
+ * Estado do anúncio no provedor, do jeito que a atualização precisa saber.
+ *
+ * Uma consulta antes de escrever, e ela paga por si: sem ela, o motivo real de
+ * uma recusa some atrás da frase do provedor. Foi o que aconteceu com
+ * "price is not modifiable | available_quantity is not modifiable" -- que não
+ * é um defeito nosso nem um dado inválido, mas duas regras do Mercado Livre
+ * que a mensagem não nomeia.
+ */
+async function estadoDoAnuncio(token: string, itemId: string, fetcher: typeof fetch) {
+  const corpo = await tratar(await fetcher(
+    `${API_ORIGIN}/items/${itemId}?attributes=id,status,sub_status,user_product_id`,
+    { method: "GET", headers: cabecalhos(token), redirect: "error", cache: "no-store",
+      signal: AbortSignal.timeout(15000) },
+  ), "O Mercado Livre não devolveu o anúncio");
+  return {
+    status: typeof corpo.status === "string" ? corpo.status : "",
+    subStatus: (Array.isArray(corpo.sub_status) ? corpo.sub_status : []).map(String),
+    userProductId: typeof corpo.user_product_id === "string" ? corpo.user_product_id : null,
+  };
+}
+
+/**
+ * Estoque de um anúncio no modelo **User Product**.
+ *
+ * No modelo novo do Mercado Livre, `available_quantity` do item é ESPELHO: ele
+ * é sincronizado a partir do produto do usuário (UP), e por isso o provedor
+ * responde `available_quantity is not modifiable` a quem tenta mudá-lo no
+ * item. O estoque muda aqui, e o provedor propaga para todos os anúncios que
+ * compartilham o mesmo UP.
+ *
+ * O `x-version` é obrigatório: é o controle de concorrência do provedor. Sem
+ * ele a chamada volta 400; desatualizado, volta conflito -- que é o certo,
+ * porque significa que alguém mexeu no estoque no meio do caminho.
+ */
+async function atualizarEstoqueDoUserProduct(
+  token: string, userProductId: string, quantidade: number, fetcher: typeof fetch,
+) {
+  const consulta = await fetcher(`${API_ORIGIN}/user-products/${userProductId}/stock`, {
+    method: "GET", headers: cabecalhos(token), redirect: "error", cache: "no-store",
+    signal: AbortSignal.timeout(15000),
+  });
+  const versao = consulta.headers.get("x-version") ?? "";
+  const estoque = await tratar(consulta, "O Mercado Livre não devolveu o estoque do produto");
+  if (!versao) {
+    throw new OrderError(
+      "O Mercado Livre não informou a versão do estoque (x-version), e sem ela a"
+      + " atualização é recusada.");
+  }
+
+  // O tipo editável depende da logística do vendedor. `meli_facility` é
+  // estoque em depósito do Mercado Livre e não se edita por API: quem repõe é
+  // o envio da mercadoria.
+  const locais = (Array.isArray(estoque.locations) ? estoque.locations : []).map(objectInput);
+  const tipo = ["seller_warehouse", "selling_address"]
+    .find((t) => locais.some((l) => l.type === t));
+  if (!tipo) {
+    throw new OrderError(
+      "O estoque deste anúncio é gerenciado pelo Fulfillment do Mercado Livre e não"
+      + " pode ser alterado por aqui: ele muda quando a mercadoria chega ao depósito.");
+  }
+
+  await conferir(await fetcher(
+    `${API_ORIGIN}/user-products/${userProductId}/stock/type/${tipo}`,
+    {
+      method: "PUT",
+      headers: { ...cabecalhos(token), "x-version": versao },
+      body: JSON.stringify({ quantity: quantidade }),
+      redirect: "error", cache: "no-store", signal: AbortSignal.timeout(30000),
+    },
+  ), "O Mercado Livre recusou a atualização do estoque");
+}
+
+/**
+ * Atualiza preço e estoque de um anúncio que já existe.
+ *
+ * Duas regras do provedor moldam isto, e nenhuma delas aparece na mensagem de
+ * erro que ele devolve:
+ *
+ * 1. **Anúncio em revisão não muda.** `status: under_review` (ou
+ *    `sub_status: forbidden`) congela o anúncio; qualquer campo volta como
+ *    "not modifiable". Não é dado inválido nosso, e insistir não resolve --
+ *    quem libera é a moderação do Mercado Livre.
+ * 2. **Estoque de item com `user_product_id` mora no User Product.** No item
+ *    ele é espelho, e mudá-lo lá é recusado.
+ */
+async function atualizarAnuncio(
+  token: string, itemId: string, preco: number, estoque: number, fetcher: typeof fetch,
+) {
+  const estado = await estadoDoAnuncio(token, itemId, fetcher);
+  const impedido = estado.status === "under_review"
+    || estado.subStatus.some((s) => s === "forbidden" || s === "deleted");
+  if (impedido) {
+    throw new OrderError(
+      `O anúncio está em revisão no Mercado Livre (${estado.status}`
+      + `${estado.subStatus.length ? ": " + estado.subStatus.join(", ") : ""}) e nenhum`
+      + " campo pode ser alterado enquanto isso durar. Quem libera é a moderação do"
+      + " provedor -- acompanhe pelo painel de vendas dele.");
+  }
+
+  if (estado.userProductId) {
+    await atualizarEstoqueDoUserProduct(token, estado.userProductId, estoque, fetcher);
+  }
+
+  // O preço continua no item mesmo no modelo novo: é condição de venda, e é o
+  // que permite o mesmo produto ter preços diferentes em anúncios diferentes.
+  // O estoque só vai aqui quando o anúncio é do modelo antigo.
+  const corpoEnviado: Record<string, unknown> = { price: preco };
+  if (!estado.userProductId) corpoEnviado.available_quantity = estoque;
+
+  return tratar(await fetcher(`${API_ORIGIN}/items/${itemId}`, {
+    method: "PUT",
+    headers: cabecalhos(token),
+    body: JSON.stringify(corpoEnviado),
+    redirect: "error", cache: "no-store", signal: AbortSignal.timeout(30000),
+  }), "O Mercado Livre recusou a atualização do anúncio");
+}
+
 export async function publishMercadoLivreListing(
   token: string, listing: ListingWithProduct, fetcher: typeof fetch = fetch,
 ): Promise<PublishResult> {
@@ -289,18 +407,14 @@ export async function publishMercadoLivreListing(
 
   const preco = Number(produto.price.toFixed(2));
   if (listing.externalListingId) {
-    const corpo = await tratar(await fetcher(`${API_ORIGIN}/items/${listing.externalListingId}`, {
-      method: "PUT",
-      headers: cabecalhos(token),
-      body: JSON.stringify({ price: preco, available_quantity: produto.stock }),
-      redirect: "error", cache: "no-store", signal: AbortSignal.timeout(30000),
-    }), "O Mercado Livre recusou a atualização do anúncio");
+    const corpo = await atualizarAnuncio(
+      token, listing.externalListingId, preco, produto.stock, fetcher);
     // Aqui a falha pode subir pura: o identificador já está gravado, e
     // repetir a atualização não cria anúncio nenhum.
     if (produto.description.trim()) {
       await enviarDescricao(token, listing.externalListingId, produto.description, fetcher);
     }
-    return lerResultado(corpo, listing.externalListingId);
+    return lerResultado(corpo, listing.externalListingId, produto.stock);
   }
 
   const [atributos, pictures] = await Promise.all([
@@ -358,19 +472,27 @@ export function condicaoDoProduto(condicao: string) {
   return "new";
 }
 
-function lerResultado(corpo: Record<string, unknown>, idAnterior: string | null): PublishResult {
+function lerResultado(
+  corpo: Record<string, unknown>, idAnterior: string | null, estoqueEnviado?: number,
+): PublishResult {
   const id = corpo.id ?? idAnterior;
   if (typeof id !== "string" && typeof id !== "number") {
     throw new OrderError("Publicação no Mercado Livre sem identificador.");
   }
   // O que o provedor confirmou, não o que pedimos: ele pode ajustar estoque.
-  if (typeof corpo.price !== "number" || typeof corpo.available_quantity !== "number") {
+  //
+  // A exceção é o estoque no modelo User Product: ele não é alterado no item,
+  // então a resposta do item pode não trazê-lo -- e aí vale o que acabou de
+  // ser gravado no produto do usuário, que é de onde o item o copia.
+  const estoque = typeof corpo.available_quantity === "number"
+    ? corpo.available_quantity : estoqueEnviado;
+  if (typeof corpo.price !== "number" || typeof estoque !== "number") {
     throw new OrderError("Publicação no Mercado Livre sem preço ou estoque.");
   }
   return {
     externalListingId: String(id),
     price: corpo.price.toFixed(2),
-    stock: corpo.available_quantity,
+    stock: estoque,
     // O provedor aceita a criação e ainda assim pode devolver `under_review`:
     // aceito não é o mesmo que no ar.
     externalStatus: typeof corpo.status === "string" ? corpo.status : null,
