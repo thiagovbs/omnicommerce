@@ -126,49 +126,35 @@ export async function removerProduto(productId: string) {
 }
 
 /**
- * Converte a imagem enviada do computador em data URI base64.
+ * Anexa uma imagem ao álbum de um produto, a partir do ARQUIVO.
  *
- * Feito no servidor, e não no navegador, por dois motivos: o limite de tamanho
- * e o tipo do arquivo passam a ser conferidos onde o cliente não alcança, e o
- * fluxo fica igual ao do Sebo On-Line, que também converte e devolve o data
- * URI em vez de gravar. Devolver (em vez de gravar) deixa a mesma ação servir
- * o cadastro, onde o produto ainda não tem id, e a edição.
- */
-export async function converterImagem(formData: FormData) {
-  await currentActor();
-  const arquivo = formData.get("file");
-  if (!(arquivo instanceof File) || !arquivo.size) {
-    return { ok: false as const, erro: "Selecione um arquivo de imagem." };
-  }
-  if (!tipoDeImagemAceito(arquivo.type)) {
-    return { ok: false as const, erro: "Formato não aceito. Use PNG, JPEG, WEBP, GIF ou AVIF." };
-  }
-  if (arquivo.size > MAX_IMAGE_BYTES) {
-    return {
-      ok: false as const,
-      erro: `A imagem tem ${(arquivo.size / (1024 * 1024)).toFixed(1)} MB e o limite é ${MAX_IMAGE_BYTES / (1024 * 1024)} MB.`,
-    };
-  }
-  const base64 = Buffer.from(await arquivo.arrayBuffer()).toString("base64");
-  return {
-    ok: true as const,
-    dataUri: `data:${arquivo.type};base64,${base64}`,
-    bytes: arquivo.size,
-  };
-}
-
-/**
- * Anexa uma imagem já convertida ao álbum de um produto.
+ * O arquivo vem em `FormData`, e isso não é detalhe de estilo: argumento de
+ * Server Action é serializado pelo protocolo do React, que tem uma guarda
+ * contra payload grande ("Maximum array nesting exceeded") -- a foto em base64
+ * como texto estoura essa guarda, e a requisição morre com um digest que não
+ * explica nada. `File` dentro de `FormData` vai como corpo multipart, que
+ * atravessa inteiro. Era exatamente aí que a quinta foto morria.
  *
- * Uma imagem por requisição, de propósito: é o que tira o álbum do corpo do
- * salvamento. Mandar tudo junto era o defeito -- cada foto ocupa até 4 MB em
- * base64, o corpo de uma Server Action é limitado, e a partir de um punhado de
- * fotos salvar ficava impossível.
+ * Uma imagem por requisição, e a conversão acontece aqui: a foto sobe UMA vez.
  */
-export async function anexarImagem(produtoId: string, dataUri: string) {
+export async function anexarImagem(produtoId: string, formData: FormData) {
   const actor = await currentActor();
   try {
-    const imagem = await appendProductImage(prisma, actor, produtoId, dataUri);
+    const arquivo = formData.get("file");
+    if (!(arquivo instanceof File) || !arquivo.size) {
+      throw new OrderError("Selecione um arquivo de imagem.");
+    }
+    if (!tipoDeImagemAceito(arquivo.type)) {
+      throw new OrderError("Formato não aceito. Use PNG, JPEG, WEBP, GIF ou AVIF.");
+    }
+    if (arquivo.size > MAX_IMAGE_BYTES) {
+      throw new OrderError(
+        `A imagem tem ${(arquivo.size / (1024 * 1024)).toFixed(1)} MB e o limite é `
+        + `${MAX_IMAGE_BYTES / (1024 * 1024)} MB.`);
+    }
+    const base64 = Buffer.from(await arquivo.arrayBuffer()).toString("base64");
+    const imagem = await appendProductImage(
+      prisma, actor, produtoId, `data:${arquivo.type};base64,${base64}`);
     revalidatePath("/products");
     return { ok: true as const, imagem };
   } catch (erro) {

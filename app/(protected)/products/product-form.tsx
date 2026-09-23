@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { MAX_IMAGENS } from "@/lib/domain/product-input";
 import { CategoryPicker } from "./category-picker";
-import { anexarImagem, converterImagem, salvarProduto } from "./actions";
+import { anexarImagem, salvarProduto } from "./actions";
 import type { ImagemDoAlbum, ProductRow } from "./types";
 
 interface Campos {
@@ -32,7 +32,6 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [aba, setAba] = useState<"dados" | "categoria">("dados");
-  const [enviandoImagem, setEnviandoImagem] = useState(false);
   // O álbum fica em estado local, e não no formulário: as imagens têm duas
   // origens (URL digitada e arquivo convertido no servidor) e a ordem é
   // manipulada por botões. Uma fonte só evita que as duas discordem.
@@ -67,31 +66,25 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
     setAlbum([...album, { url }]);
   }
 
-  /// Converte no servidor: é lá que tipo e tamanho são conferidos de verdade.
-  async function escolherArquivos(arquivos: FileList) {
-    setEnviandoImagem(true);
+  /**
+   * O arquivo escolhido fica AQUI até alguém salvar.
+   *
+   * A pré-visualização usa um endereço local (`createObjectURL`), então nada
+   * sobe enquanto se monta o álbum -- e a foto atravessa a rede uma única vez,
+   * no salvamento, como arquivo. Tipo e tamanho são conferidos no servidor, que
+   * é onde a conferência vale.
+   */
+  function escolherArquivos(arquivos: FileList) {
     setErro(null);
-    try {
-      // Uma de cada vez: o limite do corpo da ação é por chamada, e mandar
-      // várias juntas estouraria com poucos arquivos grandes.
-      let atual = album;
-      for (const arquivo of Array.from(arquivos)) {
-        if (atual.length >= MAX_IMAGENS) { setErro(`O álbum aceita no máximo ${MAX_IMAGENS} imagens.`); break; }
-        const corpo = new FormData();
-        corpo.append("file", arquivo);
-        const resultado = await converterImagem(corpo);
-        if (!resultado.ok) { setErro(resultado.erro); break; }
-        if (atual.some((i) => i.url === resultado.dataUri)) continue;
-        atual = [...atual, { url: resultado.dataUri }];
-        setAlbum(atual);
-      }
-    } catch {
-      setErro("Não foi possível ler a imagem.");
-    } finally {
-      setEnviandoImagem(false);
-      // Permite reenviar o mesmo arquivo depois de remover.
-      if (arquivoRef.current) arquivoRef.current.value = "";
+    let atual = album;
+    for (const arquivo of Array.from(arquivos)) {
+      if (atual.length >= MAX_IMAGENS) { setErro(`O álbum aceita no máximo ${MAX_IMAGENS} imagens.`); break; }
+      if (atual.some((i) => i.file?.name === arquivo.name && i.file?.size === arquivo.size)) continue;
+      atual = [...atual, { url: URL.createObjectURL(arquivo), file: arquivo }];
+      setAlbum(atual);
     }
+    // Permite reenviar o mesmo arquivo depois de remover.
+    if (arquivoRef.current) arquivoRef.current.value = "";
   }
 
   /// Troca com o vizinho. Mover a posição 0 é o que redefine a principal, que
@@ -109,28 +102,30 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
     setErro(null);
     try {
       // O salvamento leva só o que é leve: referência para a imagem que já
-      // está no banco e URL externa digitada. A foto enviada do computador
-      // fica de fora e entra depois, uma por requisição.
+      // está no banco e URL externa digitada. O arquivo escolhido fica de fora
+      // e sobe depois, um por requisição.
       const leves = album
-        .filter((i) => i.id || !i.url.startsWith("data:"))
+        .filter((i) => i.id || !i.file)
         .map((i) => (i.id ? `ref:${i.id}` : i.url));
       const salvo = await salvarProduto(
         { ...dados, images: leves, stock: Number(dados.stock) }, produto?.id);
       if (!salvo.ok) { setErro(salvo.erro); return; }
 
-      // Agora as novas, em ordem. Falha aqui não desfaz o que já entrou: o
-      // produto está salvo, e dizer QUAL foto ficou de fora é mais útil que
-      // reverter tudo e não dizer nada.
+      // Agora os arquivos, em ordem e um por requisição. Cada um vai como
+      // `FormData`: argumento de Server Action passa pela serialização do
+      // React, que recusa payload grande ("Maximum array nesting exceeded"), e
+      // era exatamente aí que a quinta foto morria.
       //
-      // A foto sobe duas vezes (uma para converter, outra para anexar) e isso
-      // é proposital: é o preço de nada ser gravado antes de alguém apertar
-      // Salvar. Anexar no momento do upload gastaria uma viagem a menos, mas
-      // deixaria imagem no produto de quem abriu o formulário e desistiu.
-      const novas = album.filter((i) => !i.id && i.url.startsWith("data:"));
+      // Falha aqui não desfaz o que já entrou: o produto está salvo, e dizer
+      // QUAL foto ficou de fora é mais útil que reverter tudo em silêncio.
+      const novas = album.filter((i) => !i.id && i.file);
       for (const [indice, nova] of novas.entries()) {
-        const anexada = await anexarImagem(salvo.id, nova.url);
+        const corpo = new FormData();
+        corpo.append("file", nova.file!);
+        const anexada = await anexarImagem(salvo.id, corpo);
         if (!anexada.ok) {
-          setErro(`Produto salvo, mas a imagem ${indice + 1} não entrou: ${anexada.erro}`);
+          setErro(`Produto salvo, mas a foto ${indice + 1} de ${novas.length}`
+            + ` não entrou: ${anexada.erro}`);
           return;
         }
       }
@@ -363,11 +358,11 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
                     }}
                   />
                   <button
-                    type="button" disabled={enviandoImagem || cheio}
+                    type="button" disabled={cheio}
                     onClick={() => arquivoRef.current?.click()}
                     className="inline-flex items-center gap-2 px-3 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
                   >
-                    {enviandoImagem ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                    <Upload size={14} />
                     Enviar arquivos
                   </button>
                 </div>

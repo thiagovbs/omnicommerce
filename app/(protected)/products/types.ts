@@ -8,7 +8,12 @@
  */
 export interface ImagemDoAlbum {
   id?: string;
+  /// Endereço para exibir: a URL gravada, ou um endereço local do navegador
+  /// enquanto a foto ainda não subiu.
   url: string;
+  /// Arquivo escolhido e ainda não enviado. Sobe como `FormData` no
+  /// salvamento -- argumento de Server Action não aguenta a foto em texto.
+  file?: File;
 }
 
 /// Formas planas para o cliente. Decimal do Prisma não atravessa a fronteira
