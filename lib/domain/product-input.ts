@@ -80,10 +80,31 @@ export const MAX_IMAGENS = 10;
  * o que entra aqui vai para o banco e depois para o provedor. Um valor
  * malformado só apareceria na hora da publicação, longe de quem o digitou.
  */
+/// Prefixo de uma imagem que JÁ está no álbum deste produto.
+///
+/// Existe porque o salvamento não pode carregar o álbum inteiro: cada foto
+/// ocupa até 4 MB em base64, o corpo de uma Server Action é limitado (e a
+/// Vercel corta em 4,5 MB de qualquer forma), então a partir de um punhado de
+/// fotos salvar seria impossível. A imagem viaja UMA VEZ, na requisição que a
+/// anexa; depois disso ela é referenciada pelo id da linha.
+export const PREFIXO_REF = "ref:";
+
+export function referenciaDeImagem(valor: string) {
+  return valor.startsWith(PREFIXO_REF) ? valor.slice(PREFIXO_REF.length) : null;
+}
+
 export function imagem(value: unknown) {
   if (value === undefined || value === null || value === "") return "";
   if (typeof value !== "string") throw new OrderError("Imagem inválida.");
   const texto = value.trim();
+
+  // Referência a uma linha que já existe: quem resolve é o serviço, que sabe
+  // quais imagens são deste produto.
+  const ref = referenciaDeImagem(texto);
+  if (ref !== null) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(ref)) throw new OrderError("Imagem inválida.");
+    return texto;
+  }
 
   if (texto.startsWith("data:")) {
     if (texto.length > MAX_DATA_URI) {

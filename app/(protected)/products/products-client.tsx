@@ -119,7 +119,7 @@ export function ProductsClient({ produtos, canais }: { produtos: ProductRow[]; c
                   <div className="relative shrink-0">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={produto.images[0]} alt=""
+                      src={produto.images[0].url} alt=""
                       className="h-14 w-14 rounded-lg border border-gray-200 object-cover"
                     />
                     {produto.images.length > 1 && (

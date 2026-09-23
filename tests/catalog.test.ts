@@ -4,7 +4,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { OrderError } from "../lib/domain/order-input";
 import { MAX_IMAGE_BYTES, MAX_IMAGENS, parseProduct, tipoDeImagemAceito } from "../lib/domain/product-input";
 import {
-  createProduct, listProducts, setProductStock, updateProduct,
+  appendProductImage, createProduct, listProducts, setProductStock, updateProduct,
 } from "../lib/services/products";
 import {
   estaEmDia, ListingPublisher, MAX_SYNC_ATTEMPTS, PartialPublishError, pushAposVenda,
@@ -664,6 +664,10 @@ test("álbum de imagens: validação sem banco", async (t) => {
 
 test("álbum de imagens em PostgreSQL", async (t) => {
   const db3 = new PrismaClient();
+  // PNG 1x1 real: o validador confere o base64, e texto inventado seria
+  // recusado antes de chegar ao banco.
+  const dataUri = (tipo = "image/png") =>
+    `data:${tipo};base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==`;
   const A = "https://exemplo.invalid/a.png";
   const B = "https://exemplo.invalid/b.png";
   const C = "https://exemplo.invalid/c.png";
@@ -757,6 +761,103 @@ test("álbum de imagens em PostgreSQL", async (t) => {
       const produtos = await listProducts(db3, ator);
       const alvo = produtos.find((p) => p.id === criado.id);
       assert.deepEqual(alvo?.images.map((i) => i.url), [C, B, A]);
+    });
+
+    await t.test("salvar com referência não faz a foto viajar de novo", async () => {
+      // O defeito que isto corrige: o álbum inteiro em base64 ia junto de cada
+      // salvamento, e a partir de um punhado de fotos o corpo da requisição
+      // estourava -- salvar virava impossível. Agora a imagem que já está no
+      // banco vai como `ref:<id>`.
+      const antes = await db3.productImage.findMany({
+        where: { productId: criado.id }, orderBy: { position: "asc" },
+      });
+      const refs = antes.map((i) => `ref:${i.id}`);
+      await updateProduct(db3, ator, criado.id, { ...base, title: "Outro título", images: refs });
+      const depois = await db3.productImage.findMany({
+        where: { productId: criado.id }, orderBy: { position: "asc" },
+      });
+      // Mesmas linhas, mesmos ids, mesma ordem.
+      assert.deepEqual(depois.map((i) => i.id), antes.map((i) => i.id));
+      assert.deepEqual(depois.map((i) => i.url), antes.map((i) => i.url));
+    });
+
+    await t.test("o id da imagem sobrevive à edição", async () => {
+      // O id é endereço público: o anúncio no catálogo do Meta leva
+      // `/api/product-images/{id}`. Recriar as linhas a cada salvamento
+      // transformava toda URL já anunciada em 404, sem erro deste lado.
+      const antes = await db3.productImage.findMany({ where: { productId: criado.id } });
+      await updateProduct(db3, ator, criado.id, {
+        ...base, price: "11.00", images: antes.map((i) => `ref:${i.id}`),
+      });
+      const depois = await db3.productImage.findMany({ where: { productId: criado.id } });
+      assert.deepEqual(
+        depois.map((i) => i.id).sort(), antes.map((i) => i.id).sort(),
+        "editar o produto não pode trocar o id das imagens");
+    });
+
+    await t.test("referência reordena sem colidir com a posição de quem fica", async () => {
+      const antes = await db3.productImage.findMany({
+        where: { productId: criado.id }, orderBy: { position: "asc" },
+      });
+      const invertido = [...antes].reverse();
+      await updateProduct(db3, ator, criado.id, {
+        ...base, images: invertido.map((i) => `ref:${i.id}`),
+      });
+      const depois = await db3.productImage.findMany({
+        where: { productId: criado.id }, orderBy: { position: "asc" },
+      });
+      assert.deepEqual(depois.map((i) => i.id), invertido.map((i) => i.id));
+      assert.deepEqual(depois.map((i) => i.position), depois.map((_, i) => i));
+    });
+
+    await t.test("referência de imagem de outro produto é recusada", async () => {
+      const outro = await createProduct(db3, ator, {
+        sku: "ALBUM-002", title: "Outro produto", price: "10.00", stock: 1, images: [C],
+      });
+      const alheia = await db3.productImage.findFirstOrThrow({ where: { productId: outro.id } });
+      // Aceitar seria deixar um formulário adotar a imagem de outro catálogo.
+      await assert.rejects(
+        updateProduct(db3, ator, criado.id, { ...base, images: [`ref:${alheia.id}`] }),
+        (e: Error) => e instanceof OrderError && /não encontrada/.test(e.message));
+    });
+
+    await t.test("anexar entra no fim do álbum e marca o anúncio", async () => {
+      const dataUriPng = dataUri();
+      const antes = await db3.productImage.count({ where: { productId: criado.id } });
+      await db3.listing.updateMany({ where: { productId: criado.id }, data: { needsSync: false } });
+
+      const nova = await appendProductImage(db3, ator, criado.id, dataUriPng);
+      const imagens = await db3.productImage.findMany({
+        where: { productId: criado.id }, orderBy: { position: "asc" },
+      });
+      assert.equal(imagens.length, antes + 1);
+      assert.equal(imagens[imagens.length - 1].id, nova.id);
+      assert.equal(imagens[imagens.length - 1].position, antes);
+      // O álbum mudou: o canal precisa receber de novo. Quem salva o produto
+      // depois já vê o álbum igual ao do banco e não marcaria nada.
+      const anuncio = await db3.listing.findFirst({ where: { productId: criado.id } });
+      assert.equal(anuncio?.needsSync, true);
+    });
+
+    await t.test("anexar a mesma foto duas vezes não duplica", async () => {
+      const antes = await db3.productImage.count({ where: { productId: criado.id } });
+      const repetida = await appendProductImage(db3, ator, criado.id, dataUri());
+      assert.equal(repetida.repetida, true);
+      assert.equal(await db3.productImage.count({ where: { productId: criado.id } }), antes);
+    });
+
+    await t.test("anexar respeita o teto e a organização", async () => {
+      await assert.rejects(
+        appendProductImage(db3, { userId: admin.id, organizationId: "outra" }, criado.id, C),
+        OrderError);
+
+      const cheio = await createProduct(db3, ator, {
+        sku: "ALBUM-003", title: "Álbum cheio", price: "10.00", stock: 1,
+        images: Array.from({ length: MAX_IMAGENS }, (_, i) => `https://exemplo.invalid/cheio-${i}.png`),
+      });
+      await assert.rejects(
+        appendProductImage(db3, ator, cheio.id, "https://exemplo.invalid/extra.png"),
+        (e: Error) => e instanceof OrderError && /máximo/.test(e.message));
     });
   } finally { await db3.$disconnect(); }
 });

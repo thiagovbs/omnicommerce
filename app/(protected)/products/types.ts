@@ -1,3 +1,16 @@
+/**
+ * Uma imagem do álbum, como o formulário a enxerga.
+ *
+ * `id` presente = já está no banco. É por ele que o álbum é referenciado no
+ * salvamento, em vez de a foto viajar de novo em base64 -- e é o mesmo id que
+ * compõe o endereço público `/api/product-images/{id}` usado nos anúncios.
+ * Sem `id`, é arquivo recém-convertido, que ainda precisa ser anexado.
+ */
+export interface ImagemDoAlbum {
+  id?: string;
+  url: string;
+}
+
 /// Formas planas para o cliente. Decimal do Prisma não atravessa a fronteira
 /// servidor-cliente, e arredondar para Number perderia casas: preço viaja como
 /// string, formatado uma vez só, no servidor.
@@ -29,7 +42,7 @@ export interface ProductRow {
   condition: string;
   /// Álbum na ordem do banco. A primeira é a principal, e é a que vai para
   /// provedores que aceitam uma imagem só.
-  images: string[];
+  images: ImagemDoAlbum[];
   price: string;
   currency: string;
   stock: number;

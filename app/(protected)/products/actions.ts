@@ -10,7 +10,9 @@ import {
 } from "@/lib/services/categories";
 import { listListingAttributes, setListingAttributes } from "@/lib/services/listing-attributes";
 import { requestPublication, syncListings } from "@/lib/services/listings";
-import { createProduct, setProductStock, updateProduct } from "@/lib/services/products";
+import {
+  appendProductImage, createProduct, setProductStock, updateProduct,
+} from "@/lib/services/products";
 
 /**
  * Ações do catálogo.
@@ -32,7 +34,9 @@ export async function salvarProduto(input: unknown, productId?: string) {
       ? await updateProduct(prisma, actor, productId, input)
       : await createProduct(prisma, actor, input);
     revalidatePath("/products");
-    return { ok: true as const, sku: produto.sku };
+    // O id volta porque quem salva pode ter fotos novas para anexar em
+    // seguida -- e, no cadastro, o produto acabou de ganhar id.
+    return { ok: true as const, id: produto.id, sku: produto.sku };
   } catch (erro) {
     return { ok: false as const, erro: mensagem(erro) };
   }
@@ -151,6 +155,25 @@ export async function converterImagem(formData: FormData) {
     dataUri: `data:${arquivo.type};base64,${base64}`,
     bytes: arquivo.size,
   };
+}
+
+/**
+ * Anexa uma imagem já convertida ao álbum de um produto.
+ *
+ * Uma imagem por requisição, de propósito: é o que tira o álbum do corpo do
+ * salvamento. Mandar tudo junto era o defeito -- cada foto ocupa até 4 MB em
+ * base64, o corpo de uma Server Action é limitado, e a partir de um punhado de
+ * fotos salvar ficava impossível.
+ */
+export async function anexarImagem(produtoId: string, dataUri: string) {
+  const actor = await currentActor();
+  try {
+    const imagem = await appendProductImage(prisma, actor, produtoId, dataUri);
+    revalidatePath("/products");
+    return { ok: true as const, imagem };
+  } catch (erro) {
+    return { ok: false as const, erro: mensagem(erro) };
+  }
 }
 
 // ---------------------------------------------------------------------------

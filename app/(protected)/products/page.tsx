@@ -31,7 +31,7 @@ export default async function ProductsPage() {
   const linhas: ProductRow[] = produtos.map((p) => ({
     id: p.id, sku: p.sku, title: p.title, description: p.description,
     category: p.category, brand: p.brand, condition: p.condition,
-    images: p.images.map((i) => i.url),
+    images: p.images.map((i) => ({ id: i.id, url: i.url })),
     price: p.price.toFixed(2), currency: p.currency, stock: p.stock, active: p.active,
     listings: p.listings.map((l) => ({
       id: l.id, status: l.status, needsSync: l.needsSync,

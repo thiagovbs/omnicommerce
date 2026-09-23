@@ -1,7 +1,9 @@
 import "server-only";
 import { Prisma, PrismaClient, StockMovementReason } from "@prisma/client";
 import { OrderError, textInput } from "../domain/order-input";
-import { inteiroNaoNegativo, parseProduct } from "../domain/product-input";
+import {
+  imagem, inteiroNaoNegativo, MAX_IMAGENS, parseProduct, referenciaDeImagem,
+} from "../domain/product-input";
 import { assertOrgAdmin } from "./access";
 import { assertActor, UserActor } from "./actor";
 import { serializable } from "./transactions";
@@ -22,14 +24,143 @@ const CAMPOS_PUBLICADOS = [
   "title", "description", "price", "stock", "brand", "condition", "category", "active",
 ] as const;
 
-/// Grava o álbum inteiro de uma vez: apagar e recriar é mais simples que
-/// casar item a item, e a posição de cada imagem passa a ser o índice na
-/// lista — quem reordena na tela manda a ordem nova e pronto.
+/**
+ * Para cada entrada do álbum, a linha que já existe -- ou `null`, se é nova.
+ *
+ * Duas formas casam com uma linha existente, e as duas importam:
+ *
+ * - `ref:<id>`: o formulário mandando "esta é a foto que já está aí". É o que
+ *   evita a base64 viajar de novo a cada salvamento.
+ * - a **mesma URL**: quem cadastra por endereço externo continua mandando o
+ *   endereço, e ele é identificador estável. Tratar isso como imagem nova
+ *   reescreveria a linha (trocando o id, que é endereço público) e marcaria os
+ *   anúncios para ressincronizar sem nada ter mudado.
+ */
+function resolverAlbum(
+  atuais: { id: string; url: string }[], images: string[],
+): (string | null)[] {
+  const porId = new Map(atuais.map((i) => [i.id, i]));
+  const porUrl = new Map<string, string>();
+  for (const i of atuais) if (!porUrl.has(i.url)) porUrl.set(i.url, i.id);
+
+  const usados = new Set<string>();
+  return images.map((entrada) => {
+    const ref = referenciaDeImagem(entrada);
+    if (ref !== null) {
+      // Aceitar um id que não é deste produto deixaria um formulário adotar a
+      // imagem de outro catálogo.
+      if (!porId.has(ref) || usados.has(ref)) {
+        throw new OrderError("Imagem não encontrada neste produto.");
+      }
+      usados.add(ref);
+      return ref;
+    }
+    const id = porUrl.get(entrada);
+    if (id && !usados.has(id)) {
+      usados.add(id);
+      return id;
+    }
+    return null;
+  });
+}
+
+/**
+ * Grava o álbum preservando as linhas que continuam nele.
+ *
+ * Duas coisas dependem disso, e as duas quebraram com a versão anterior, que
+ * apagava tudo e recriava:
+ *
+ * 1. **O id da imagem é endereço público.** O anúncio no catálogo do Meta leva
+ *    `/api/product-images/{id}`. Recriar as linhas a cada salvamento trocava o
+ *    id, e toda URL já anunciada virava 404 -- sem nenhum erro deste lado.
+ * 2. **A foto não viaja de novo.** O que chega aqui para uma imagem que já
+ *    existe é `ref:<id>`, não os megabytes dela. É o que permite salvar um
+ *    produto com dez fotos sem estourar o corpo da requisição.
+ *
+ * Entrada com `ref:` que não seja deste produto é recusada: aceitar seria
+ * deixar um formulário adotar a imagem de outro catálogo.
+ */
 async function gravarAlbum(tx: Prisma.TransactionClient, productId: string, images: string[]) {
-  await tx.productImage.deleteMany({ where: { productId } });
-  if (!images.length) return;
-  await tx.productImage.createMany({
-    data: images.map((url, position) => ({ productId, position, url })),
+  const atuais = await tx.productImage.findMany({
+    where: { productId }, select: { id: true, url: true },
+  });
+  const resolvidas = resolverAlbum(atuais, images);
+
+  const manter = resolvidas.filter((r) => r !== null) as string[];
+  const novas: { url: string; position: number }[] = [];
+  resolvidas.forEach((id, position) => {
+    if (id === null) novas.push({ url: images[position], position });
+  });
+
+  // O que saiu do álbum sai do banco. Sobra ordenada depois, para a posição
+  // não colidir com a de uma linha que ainda será apagada.
+  await tx.productImage.deleteMany({
+    where: { productId, id: { notIn: manter.length ? manter : ["-"] } },
+  });
+  // Posição temporária negativa antes da definitiva: `(productId, position)`
+  // é único, e mover a imagem 2 para a 0 esbarraria na que ainda está lá.
+  for (const [indice, id] of manter.entries()) {
+    await tx.productImage.update({ where: { id }, data: { position: -1 - indice } });
+  }
+  for (const [position, id] of resolvidas.entries()) {
+    if (id !== null) await tx.productImage.update({ where: { id }, data: { position } });
+  }
+  if (novas.length) {
+    await tx.productImage.createMany({
+      data: novas.map((n) => ({ productId, position: n.position, url: n.url })),
+    });
+  }
+}
+
+/**
+ * Anexa UMA imagem ao fim do álbum.
+ *
+ * É por aqui que a foto entra, e é o caminho que tira o álbum da requisição de
+ * salvar: uma imagem por requisição cabe no limite; o álbum inteiro, não.
+ *
+ * Marca os anúncios para ressincronizar, porque mudar o álbum muda o que o
+ * canal precisa receber -- e quem salva o produto depois vê o álbum já igual
+ * ao que está no banco, então não marcaria nada.
+ */
+export async function appendProductImage(
+  db: PrismaClient, actor: UserActor, productId: string, dataUri: unknown,
+) {
+  const id = textInput(productId, "Produto");
+  const url = imagem(dataUri);
+  if (!url) throw new OrderError("Selecione um arquivo de imagem.");
+  if (referenciaDeImagem(url) !== null) throw new OrderError("Imagem inválida.");
+
+  return serializable(db, async (tx) => {
+    await assertOrgAdmin(tx, actor);
+    const produto = await tx.product.findFirst({
+      where: { id, organizationId: actor.organizationId }, select: { id: true, sku: true },
+    });
+    if (!produto) throw new OrderError("Produto não encontrado.");
+
+    const existentes = await tx.productImage.findMany({
+      where: { productId: id }, select: { position: true, url: true },
+      orderBy: { position: "desc" },
+    });
+    if (existentes.length >= MAX_IMAGENS) {
+      throw new OrderError(`O álbum aceita no máximo ${MAX_IMAGENS} imagens.`);
+    }
+    // A mesma foto duas vezes é engano de quem cadastra, e o álbum já tratava
+    // repetição descartando em vez de recusar.
+    const repetida = existentes.find((i) => i.url === url);
+    if (repetida) return { id: null, position: repetida.position, repetida: true };
+
+    const imagemNova = await tx.productImage.create({
+      data: { productId: id, url, position: (existentes[0]?.position ?? -1) + 1 },
+      select: { id: true, position: true },
+    });
+    const pendentes = (await marcarAnunciosPendentes(tx, id)).count;
+    await tx.auditLog.create({ data: {
+      action: "UPDATE", entity: "PRODUCT", entityId: id,
+      organizationId: actor.organizationId, userId: actor.userId,
+      details: `Imagem acrescentada ao produto ${produto.sku}.`
+        + (pendentes ? ` ${pendentes} anúncio(s) para ressincronizar.` : ""),
+    } });
+    return { ...imagemNova, repetida: false };
   });
 }
 
@@ -96,7 +227,7 @@ export async function updateProduct(db: PrismaClient, actor: UserActor, productI
     // formulário não alcança o catálogo de outro tenant.
     const atual = await tx.product.findFirst({
       where: { id, organizationId: actor.organizationId },
-      include: { images: { orderBy: { position: "asc" }, select: { url: true } } },
+      include: { images: { orderBy: { position: "asc" }, select: { id: true, url: true } } },
     });
     if (!atual) throw new OrderError("Produto não encontrado.");
 
@@ -120,10 +251,14 @@ export async function updateProduct(db: PrismaClient, actor: UserActor, productI
     }
 
     // Ordem conta: trocar a principal muda o que o provedor recebe, mesmo que
-    // o conjunto de imagens seja o mesmo.
-    const albumAntigo = atual.images.map((i) => i.url);
-    const mudouAlbum = albumAntigo.length !== images.length
-      || albumAntigo.some((url, i) => url !== images[i]);
+    // o conjunto de imagens seja o mesmo. A comparação é por ID, e não por
+    // conteúdo: o que chega para uma imagem que já existe é `ref:<id>`, e
+    // comparar isso com a base64 diria "mudou" a cada salvamento.
+    const albumAntigo = atual.images.map((i) => i.id);
+    const albumNovo = resolverAlbum(atual.images, images);
+    const mudouAlbum = albumAntigo.length !== albumNovo.length
+      // `null` é imagem nova: só de existir já mudou o álbum.
+      || albumNovo.some((id, i) => id === null || id !== albumAntigo[i]);
     if (mudouAlbum) await gravarAlbum(tx, id, images);
 
     const mudouPublicado = mudouAlbum || CAMPOS_PUBLICADOS.some((campo) => campo === "price"

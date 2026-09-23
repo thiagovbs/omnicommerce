@@ -7,8 +7,8 @@ import {
 } from "lucide-react";
 import { MAX_IMAGENS } from "@/lib/domain/product-input";
 import { CategoryPicker } from "./category-picker";
-import { converterImagem, salvarProduto } from "./actions";
-import type { ProductRow } from "./types";
+import { anexarImagem, converterImagem, salvarProduto } from "./actions";
+import type { ImagemDoAlbum, ProductRow } from "./types";
 
 interface Campos {
   sku: string;
@@ -36,7 +36,13 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
   // O álbum fica em estado local, e não no formulário: as imagens têm duas
   // origens (URL digitada e arquivo convertido no servidor) e a ordem é
   // manipulada por botões. Uma fonte só evita que as duas discordem.
-  const [album, setAlbum] = useState<string[]>(produto?.images ?? []);
+  //
+  // Cada entrada sabe se já está no banco (`id`) ou se ainda é só um arquivo
+  // convertido aqui. É essa diferença que decide o que viaja no salvamento: a
+  // que já existe vai como referência, e só a nova carrega a base64 -- uma por
+  // requisição. Mandar o álbum inteiro junto era o defeito que impedia salvar
+  // da quinta foto em diante.
+  const [album, setAlbum] = useState<ImagemDoAlbum[]>(produto?.images ?? []);
   const [urlNova, setUrlNova] = useState("");
   const arquivoRef = useRef<HTMLInputElement>(null);
 
@@ -57,8 +63,8 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
   function acrescentar(url: string) {
     setErro(null);
     if (cheio) { setErro(`O álbum aceita no máximo ${MAX_IMAGENS} imagens.`); return; }
-    if (album.includes(url)) { setErro("Essa imagem já está no álbum."); return; }
-    setAlbum([...album, url]);
+    if (album.some((i) => i.url === url)) { setErro("Essa imagem já está no álbum."); return; }
+    setAlbum([...album, { url }]);
   }
 
   /// Converte no servidor: é lá que tipo e tamanho são conferidos de verdade.
@@ -75,8 +81,8 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
         corpo.append("file", arquivo);
         const resultado = await converterImagem(corpo);
         if (!resultado.ok) { setErro(resultado.erro); break; }
-        if (atual.includes(resultado.dataUri)) continue;
-        atual = [...atual, resultado.dataUri];
+        if (atual.some((i) => i.url === resultado.dataUri)) continue;
+        atual = [...atual, { url: resultado.dataUri }];
         setAlbum(atual);
       }
     } catch {
@@ -102,9 +108,32 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
     setSalvando(true);
     setErro(null);
     try {
+      // O salvamento leva só o que é leve: referência para a imagem que já
+      // está no banco e URL externa digitada. A foto enviada do computador
+      // fica de fora e entra depois, uma por requisição.
+      const leves = album
+        .filter((i) => i.id || !i.url.startsWith("data:"))
+        .map((i) => (i.id ? `ref:${i.id}` : i.url));
       const salvo = await salvarProduto(
-        { ...dados, images: album, stock: Number(dados.stock) }, produto?.id);
+        { ...dados, images: leves, stock: Number(dados.stock) }, produto?.id);
       if (!salvo.ok) { setErro(salvo.erro); return; }
+
+      // Agora as novas, em ordem. Falha aqui não desfaz o que já entrou: o
+      // produto está salvo, e dizer QUAL foto ficou de fora é mais útil que
+      // reverter tudo e não dizer nada.
+      //
+      // A foto sobe duas vezes (uma para converter, outra para anexar) e isso
+      // é proposital: é o preço de nada ser gravado antes de alguém apertar
+      // Salvar. Anexar no momento do upload gastaria uma viagem a menos, mas
+      // deixaria imagem no produto de quem abriu o formulário e desistiu.
+      const novas = album.filter((i) => !i.id && i.url.startsWith("data:"));
+      for (const [indice, nova] of novas.entries()) {
+        const anexada = await anexarImagem(salvo.id, nova.url);
+        if (!anexada.ok) {
+          setErro(`Produto salvo, mas a imagem ${indice + 1} não entrou: ${anexada.erro}`);
+          return;
+        }
+      }
       // Publicar é um passo à parte, pelos botões da linha: salvar no catálogo
       // e anunciar no canal são decisões diferentes, e juntá-las esconderia a
       // segunda atrás da primeira.
@@ -257,11 +286,11 @@ export function ProductForm({ produto }: { produto?: ProductRow }) {
 
                 {album.length > 0 && (
                   <div className="flex flex-wrap gap-3 mb-3">
-                    {album.map((url, indice) => (
-                      <div key={url} className="relative w-28">
+                    {album.map((imagem, indice) => (
+                      <div key={imagem.id ?? imagem.url} className="relative w-28">
                         <div className="h-28 w-28 rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={url} alt={`Imagem ${indice + 1}`} className="h-full w-full object-cover" />
+                          <img src={imagem.url} alt={`Imagem ${indice + 1}`} className="h-full w-full object-cover" />
                         </div>
                         <button
                           type="button" onClick={() => setAlbum(album.filter((_, i) => i !== indice))}
